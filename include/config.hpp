@@ -55,6 +55,7 @@ namespace rpi {
         bool gpioEnabled;
         int pollIntervalMs;
         bool sensorLogging;
+        bool ds18b20Enabled;
         std::unordered_map<std::string, std::string> gpioPins;
     };
     

@@ -174,6 +174,7 @@ namespace rpi {
         // Sensors section
         config.pollIntervalMs = parser.getInt("Sensors", "poll_interval_ms", 1000);
         config.sensorLogging = parser.getBool("Sensors", "enable_logging", true);
+        config.ds18b20Enabled = parser.getBool("Sensors", "ds18b20_enabled", true);
         
         return config;
     }

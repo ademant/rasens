@@ -108,20 +108,22 @@ void runService(const rpi::ServiceConfig& config) {
             logMessage("DEBUG", "Polling sensors...", config.logFile);
         }
         
-        // Read all DS18B20 temperature sensors
-        std::vector<rpi::SensorReading> readings = rpi::readAllDSTemperatureSensors();
-        
-        // Print sensor readings in the format: hostname/sensor/id/measurement : value
-        for (const auto& reading : readings) {
-            std::cout << hostname << "/" << reading.sensor_type << "/" 
-                      << reading.sensor_id << "/" << reading.measurement 
-                      << " : " << std::fixed << std::setprecision(1) << reading.value << std::endl;
+        // Read all DS18B20 temperature sensors if enabled in config
+        if (config.ds18b20Enabled) {
+            std::vector<rpi::SensorReading> readings = rpi::readAllDSTemperatureSensors();
             
-            // Also log to file if configured
-            if (!config.logFile.empty() && config.sensorLogging) {
-                logMessage("INFO", hostname + "/" + reading.sensor_type + "/" + 
-                          reading.sensor_id + "/" + reading.measurement + " : " + 
-                          std::to_string(reading.value), config.logFile);
+            // Print sensor readings in the format: hostname/sensor/id/measurement : value
+            for (const auto& reading : readings) {
+                std::cout << hostname << "/" << reading.sensor_type << "/" 
+                          << reading.sensor_id << "/" << reading.measurement 
+                          << " : " << std::fixed << std::setprecision(1) << reading.value << std::endl;
+                
+                // Also log to file if configured
+                if (!config.logFile.empty() && config.sensorLogging) {
+                    logMessage("INFO", hostname + "/" + reading.sensor_type + "/" + 
+                              reading.sensor_id + "/" + reading.measurement + " : " + 
+                              std::to_string(reading.value), config.logFile);
+                }
             }
         }
         
@@ -146,6 +148,7 @@ void displayConfigAndExit(const rpi::ServiceConfig& config) {
     std::cout << "GPIO Enabled: " << (config.gpioEnabled ? "Yes" : "No") << std::endl;
     std::cout << "Poll Interval: " << config.pollIntervalMs << "ms" << std::endl;
     std::cout << "Sensor Logging: " << (config.sensorLogging ? "Yes" : "No") << std::endl;
+    std::cout << "DS18B20 Enabled: " << (config.ds18b20Enabled ? "Yes" : "No") << std::endl;
     
     std::cout << "\nGPIO Pins:" << std::endl;
     for (const auto& [pin, cfg] : config.gpioPins) {
