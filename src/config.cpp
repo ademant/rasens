@@ -176,6 +176,12 @@ namespace rpi {
         config.sensorLogging = parser.getBool("Sensors", "enable_logging", true);
         config.ds18b20Enabled = parser.getBool("Sensors", "ds18b20_enabled", true);
         
+        // EE895 CO2 sensor configuration
+        config.ee895Enabled = parser.getBool("Sensors", "ee895_enabled", false);
+        config.ee895I2CBus = parser.getInt("Sensors", "ee895_i2c_bus", 1);
+        config.ee895I2CAddress = parser.getInt("Sensors", "ee895_i2c_address", 0x5A);
+        config.ee895SensorId = parser.getString("Sensors", "ee895_sensor_id", "ee895-1");
+        
         return config;
     }
 }

@@ -127,6 +127,29 @@ void runService(const rpi::ServiceConfig& config) {
             }
         }
         
+        // Read EE895 CO2 sensor if enabled in config
+        if (config.ee895Enabled) {
+            std::vector<rpi::SensorReading> readings = rpi::readEE895Sensor(
+                config.ee895I2CBus, 
+                config.ee895I2CAddress, 
+                config.ee895SensorId
+            );
+            
+            // Print sensor readings in the format: hostname/sensor/id/measurement : value
+            for (const auto& reading : readings) {
+                std::cout << hostname << "/" << reading.sensor_type << "/" 
+                          << reading.sensor_id << "/" << reading.measurement 
+                          << " : " << std::fixed << std::setprecision(1) << reading.value << std::endl;
+                
+                // Also log to file if configured
+                if (!config.logFile.empty() && config.sensorLogging) {
+                    logMessage("INFO", hostname + "/" + reading.sensor_type + "/" + 
+                              reading.sensor_id + "/" + reading.measurement + " : " + 
+                              std::to_string(reading.value), config.logFile);
+                }
+            }
+        }
+        
         // Sleep for poll interval
         usleep(config.pollIntervalMs * 1000);
         counter++;
@@ -149,6 +172,12 @@ void displayConfigAndExit(const rpi::ServiceConfig& config) {
     std::cout << "Poll Interval: " << config.pollIntervalMs << "ms" << std::endl;
     std::cout << "Sensor Logging: " << (config.sensorLogging ? "Yes" : "No") << std::endl;
     std::cout << "DS18B20 Enabled: " << (config.ds18b20Enabled ? "Yes" : "No") << std::endl;
+    std::cout << "EE895 Enabled: " << (config.ee895Enabled ? "Yes" : "No") << std::endl;
+    if (config.ee895Enabled) {
+        std::cout << "  I2C Bus: " << config.ee895I2CBus << std::endl;
+        std::cout << "  I2C Address: 0x" << std::hex << config.ee895I2CAddress << std::dec << std::endl;
+        std::cout << "  Sensor ID: " << config.ee895SensorId << std::endl;
+    }
     
     std::cout << "\nGPIO Pins:" << std::endl;
     for (const auto& [pin, cfg] : config.gpioPins) {

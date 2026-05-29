@@ -56,6 +56,10 @@ namespace rpi {
         int pollIntervalMs;
         bool sensorLogging;
         bool ds18b20Enabled;
+        bool ee895Enabled;
+        int ee895I2CBus;
+        int ee895I2CAddress;
+        std::string ee895SensorId;
         std::unordered_map<std::string, std::string> gpioPins;
     };
     

@@ -7,6 +7,10 @@
 #include <sys/stat.h>
 #include <cstring>
 #include <algorithm>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <linux/i2c-dev.h>
+#include <iomanip>
 
 std::string rpi::getPlatformInfo() {
     #ifdef __ARM_ARCH
@@ -168,4 +172,125 @@ bool rpi::digitalWrite(int pin, bool value) {
 bool rpi::digitalRead(int pin) {
     // Implementation placeholder
     return false;
+}
+
+// Open I2C device at specified bus and address
+int rpi::openI2CDevice(int i2cBus, int address) {
+    std::string i2cDevice = "/dev/i2c-" + std::to_string(i2cBus);
+    int fd = open(i2cDevice.c_str(), O_RDWR);
+    if (fd < 0) {
+        return -1;
+    }
+    if (ioctl(fd, I2C_SLAVE, address) < 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+// Close I2C device
+void closeI2CDevice(int fd) {
+    if (fd >= 0) {
+        close(fd);
+    }
+}
+
+// Read from I2C device - helper function
+bool i2cReadBytes(int fd, uint8_t* buffer, int length) {
+    if (read(fd, buffer, length) != length) {
+        return false;
+    }
+    return true;
+}
+
+// Write to I2C device - helper function
+bool i2cWriteBytes(int fd, const uint8_t* buffer, int length) {
+    if (write(fd, buffer, length) != length) {
+        return false;
+    }
+    return true;
+}
+
+// Read EE895 sensor data
+// The EE895 provides CO2 (ppm), temperature (C), and pressure (hPa)
+// Communication protocol: Send 0x00 command, then read 9 bytes of data
+bool rpi::readEE895(int fd, double& co2, double& temperature, double& pressure) {
+    uint8_t cmd = 0x00;  // Command to read all measurements
+    uint8_t data[9] = {0};  // EE895 returns 9 bytes
+    
+    // Send read command
+    if (!i2cWriteBytes(fd, &cmd, 1)) {
+        return false;
+    }
+    
+    // Small delay for sensor to prepare data
+    usleep(50000);  // 50ms delay
+    
+    // Read 9 bytes of data
+    if (!i2cReadBytes(fd, data, 9)) {
+        return false;
+    }
+    
+    // Parse the data (EE895 format)
+    // Bytes 0-1: CO2 (unsigned int, ppm)
+    // Bytes 2-3: Temperature (signed short, x100 = °C)
+    // Bytes 4-5: Pressure (unsigned short, x10 = hPa)
+    // Bytes 6-7: Status and checksum
+    
+    uint16_t co2Raw = (data[0] << 8) | data[1];
+    int16_t tempRaw = (data[2] << 8) | data[3];
+    uint16_t pressureRaw = (data[4] << 8) | data[5];
+    
+    // Convert raw values to actual units
+    co2 = static_cast<double>(co2Raw);
+    temperature = static_cast<double>(tempRaw) / 100.0;
+    pressure = static_cast<double>(pressureRaw) / 10.0;
+    
+    return true;
+}
+
+// Read from EE895 sensor at specific address and return SensorReading vector
+std::vector<rpi::SensorReading> rpi::readEE895Sensor(int i2cBus, int address, const std::string& sensorId) {
+    std::vector<SensorReading> readings;
+    
+    int fd = openI2CDevice(i2cBus, address);
+    if (fd < 0) {
+        return readings;  // Could not open I2C device
+    }
+    
+    double co2, temperature, pressure;
+    if (readEE895(fd, co2, temperature, pressure)) {
+        readings.push_back({
+            "ee895",
+            sensorId,
+            "co2",
+            co2
+        });
+        readings.push_back({
+            "ee895",
+            sensorId,
+            "temperature",
+            temperature
+        });
+        readings.push_back({
+            "ee895",
+            sensorId,
+            "pressure",
+            pressure
+        });
+    }
+    
+    closeI2CDevice(fd);
+    return readings;
+}
+
+// Read from EE895 sensor - tries default address (0x5A) first, then alt (0x5B)
+std::vector<rpi::SensorReading> rpi::readEE895Sensor(int i2cBus, const std::string& sensorId) {
+    // Try default address first
+    auto readings = readEE895Sensor(i2cBus, EE895_I2C_ADDRESS_DEFAULT, sensorId);
+    if (!readings.empty()) {
+        return readings;
+    }
+    // Try alternate address
+    return readEE895Sensor(i2cBus, EE895_I2C_ADDRESS_ALT, sensorId);
 }
