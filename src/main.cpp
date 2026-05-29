@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <iomanip>
+#include <vector>
 
 #include "config.hpp"
 #include "utils.hpp"
@@ -83,6 +85,9 @@ void runService(const rpi::ServiceConfig& config) {
     logMessage("INFO", "Log level: " + config.logLevel, config.logFile);
     logMessage("INFO", "Configuration loaded successfully", config.logFile);
     
+    // Get hostname for sensor output
+    std::string hostname = rpi::getHostname();
+    
     // Setup GPIO if enabled
     if (config.gpioEnabled) {
         logMessage("INFO", "GPIO support enabled", config.logFile);
@@ -101,6 +106,23 @@ void runService(const rpi::ServiceConfig& config) {
         // Sensor polling
         if (config.sensorLogging && counter % 10 == 0) {
             logMessage("DEBUG", "Polling sensors...", config.logFile);
+        }
+        
+        // Read all DS18B20 temperature sensors
+        std::vector<rpi::SensorReading> readings = rpi::readAllDSTemperatureSensors();
+        
+        // Print sensor readings in the format: hostname/sensor/id/measurement : value
+        for (const auto& reading : readings) {
+            std::cout << hostname << "/" << reading.sensor_type << "/" 
+                      << reading.sensor_id << "/" << reading.measurement 
+                      << " : " << std::fixed << std::setprecision(1) << reading.value << std::endl;
+            
+            // Also log to file if configured
+            if (!config.logFile.empty() && config.sensorLogging) {
+                logMessage("INFO", hostname + "/" + reading.sensor_type + "/" + 
+                          reading.sensor_id + "/" + reading.measurement + " : " + 
+                          std::to_string(reading.value), config.logFile);
+            }
         }
         
         // Sleep for poll interval
