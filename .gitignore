@@ -1,69 +1,31 @@
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-*.so.*
-
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# Build directories
+# CMake build files
 build/
-Build/
-build-*/
-
-# CMake generated files
-CMakeFiles/
 CMakeCache.txt
-cmake_install.cmake
-Makefile
-install_manifest.txt
-compile_commands.json
+CMakeFiles/
 
-# Temporary files
-*.tmp
-*.log
-*.bak
+# Compiled binaries
+*.o
+*.a
+*.so
+*.exe
+
+# IDE specific
+.idea/
+.vscode/
 *.swp
+*.swo
 
-# vcpkg
-vcpkg_installed/
+# OS specific
+.DS_Store
+Thumbs.db
 
-# debug information files
-*.dwo
+# Raspberry Pi specific
+*.ko
 
-# test output & cache
-Testing/
-.cache/
+# Logs
+*.log
+
+# Installation directories (these are created by install script)
+/opt/rasens/
+/etc/rasens/
+/var/log/rasens/

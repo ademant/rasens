@@ -1,0 +1,39 @@
+[Unit]
+Description=Rasens C++ Service for Raspberry Pi
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# Working directory
+WorkingDirectory=/opt/rasens
+
+# Executable path (will be installed)
+ExecStart=/opt/rasens/bin/rasens
+
+# Restart on failure
+Restart=on-failure
+RestartSec=5s
+
+# Environment variables
+Environment=RASENS_CONFIG=/etc/rasens/config.conf
+Environment=RASENS_LOG=/var/log/rasens/service.log
+
+# Standard output and error
+StandardOutput=journal
+StandardError=journal
+
+# Syslog identifier
+SyslogIdentifier=rasens
+
+# Permissions
+UMask=0002
+
+# Timeout
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
