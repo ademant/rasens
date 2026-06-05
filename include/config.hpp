@@ -4,6 +4,8 @@
 #include <unordered_map>
 #include <vector>
 #include <memory>
+#include <iomanip>
+#include <sstream>
 
 namespace rpi {
     class ConfigParser {
@@ -45,6 +47,7 @@ namespace rpi {
     
     // Service configuration structure
     struct ServiceConfig {
+        std::string configPath;
         std::string name;
         std::string logLevel;
         std::string logFile;
@@ -60,9 +63,14 @@ namespace rpi {
         int ee895I2CBus;
         int ee895I2CAddress;
         std::string ee895SensorId;
+        bool sds011Enabled;
+        std::vector<std::string> sds011Devices;
         std::unordered_map<std::string, std::string> gpioPins;
     };
-    
+
     // Load service configuration
     ServiceConfig loadServiceConfig();
+
+    // Write service configuration (clean, no comments)
+    bool writeServiceConfig(const ServiceConfig& config);
 }

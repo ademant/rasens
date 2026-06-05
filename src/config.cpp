@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <iostream>
+#include <iomanip>
 
 namespace rpi {
     const std::string ConfigParser::DEFAULT_CONFIG_PATH = "/etc/rasens/config.conf";
@@ -84,7 +85,7 @@ namespace rpi {
         std::string value = getString(section, key, "");
         if (!value.empty()) {
             try {
-                return std::stoi(value);
+                return std::stoi(value, nullptr, 0);
             } catch (...) {
                 return defaultValue;
             }
@@ -138,50 +139,117 @@ namespace rpi {
     ServiceConfig loadServiceConfig() {
         ServiceConfig config;
         ConfigParser& parser = getConfig();
-        
-        // Try to load from environment variable first, then default path
-        const char* configPath = std::getenv("RASENS_CONFIG");
-        std::string path = configPath ? configPath : ConfigParser::DEFAULT_CONFIG_PATH;
-        
-        if (!parser.load(path)) {
-            // Try local development path
-            if (!parser.load("config/rasens.conf")) {
-                std::cerr << "Warning: Could not load configuration from " << path << " or config/rasens.conf" << std::endl;
-                return config;
-            }
+
+        const char* envPath = std::getenv("RASENS_CONFIG");
+        std::string path = envPath ? envPath : ConfigParser::DEFAULT_CONFIG_PATH;
+
+        if (parser.load(path)) {
+            config.configPath = path;
+        } else if (parser.load("config/rasens.conf")) {
+            config.configPath = "config/rasens.conf";
+        } else {
+            std::cerr << "Warning: Could not load configuration from " << path << " or config/rasens.conf" << std::endl;
+            return config;
         }
-        
+
         // General section
         config.name = parser.getString("General", "name", "rasens");
         config.logLevel = parser.getString("General", "log_level", "INFO");
         config.logFile = parser.getString("General", "log_file", "/var/log/rasens/service.log");
         config.pidFile = parser.getString("General", "pid_file", "/var/run/rasens.pid");
-        
+
         // Network section
         config.networkEnabled = parser.getBool("Network", "enabled", false);
         config.port = parser.getInt("Network", "port", 8080);
         config.bindAddress = parser.getString("Network", "bind_address", "0.0.0.0");
-        
+
         // GPIO section
         config.gpioEnabled = parser.getBool("GPIO", "enabled", true);
-        auto gpioKeys = parser.getKeys("GPIO");
-        for (const auto& key : gpioKeys) {
-            if (key.find("pin_") == 0) {
+        for (const auto& key : parser.getKeys("GPIO")) {
+            if (key.find("pin_") == 0)
                 config.gpioPins[key] = parser.getString("GPIO", key, "");
-            }
         }
-        
+
         // Sensors section
         config.pollIntervalMs = parser.getInt("Sensors", "poll_interval_ms", 1000);
         config.sensorLogging = parser.getBool("Sensors", "enable_logging", true);
         config.ds18b20Enabled = parser.getBool("Sensors", "ds18b20_enabled", true);
-        
-        // EE895 CO2 sensor configuration
+
+        // EE895 CO2 sensor
         config.ee895Enabled = parser.getBool("Sensors", "ee895_enabled", false);
         config.ee895I2CBus = parser.getInt("Sensors", "ee895_i2c_bus", 1);
-        config.ee895I2CAddress = parser.getInt("Sensors", "ee895_i2c_address", 0x5A);
+        config.ee895I2CAddress = parser.getInt("Sensors", "ee895_i2c_address", 0);
         config.ee895SensorId = parser.getString("Sensors", "ee895_sensor_id", "ee895-1");
-        
+
+        // SDS011 dust sensor
+        config.sds011Enabled = parser.getBool("SDS011", "enabled", false);
+        std::string devicesStr = parser.getString("SDS011", "devices", "");
+        if (!devicesStr.empty()) {
+            std::istringstream ss(devicesStr);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                auto s = token.begin();
+                while (s != token.end() && std::isspace((unsigned char)*s)) ++s;
+                auto e = token.end();
+                while (e != s && std::isspace((unsigned char)*(e - 1))) --e;
+                std::string trimmed(s, e);
+                if (!trimmed.empty())
+                    config.sds011Devices.push_back(trimmed);
+            }
+        }
+
         return config;
+    }
+
+    bool writeServiceConfig(const ServiceConfig& config) {
+        if (config.configPath.empty()) {
+            std::cerr << "Error: no config path to write to" << std::endl;
+            return false;
+        }
+
+        std::ofstream f(config.configPath);
+        if (!f.is_open()) {
+            std::cerr << "Error: cannot write config to " << config.configPath << std::endl;
+            return false;
+        }
+
+        f << "[General]\n"
+          << "name = " << config.name << "\n"
+          << "log_level = " << config.logLevel << "\n"
+          << "log_file = " << config.logFile << "\n"
+          << "pid_file = " << config.pidFile << "\n\n";
+
+        f << "[Network]\n"
+          << "enabled = " << (config.networkEnabled ? "true" : "false") << "\n"
+          << "port = " << config.port << "\n"
+          << "bind_address = " << config.bindAddress << "\n\n";
+
+        f << "[GPIO]\n"
+          << "enabled = " << (config.gpioEnabled ? "true" : "false") << "\n";
+        for (const auto& [key, val] : config.gpioPins)
+            f << key << " = " << val << "\n";
+        f << "\n";
+
+        f << "[Sensors]\n"
+          << "poll_interval_ms = " << config.pollIntervalMs << "\n"
+          << "enable_logging = " << (config.sensorLogging ? "true" : "false") << "\n"
+          << "ds18b20_enabled = " << (config.ds18b20Enabled ? "true" : "false") << "\n"
+          << "ee895_enabled = " << (config.ee895Enabled ? "true" : "false") << "\n"
+          << "ee895_i2c_bus = " << config.ee895I2CBus << "\n"
+          << "ee895_i2c_address = 0x" << std::hex << config.ee895I2CAddress << std::dec << "\n"
+          << "ee895_sensor_id = " << config.ee895SensorId << "\n\n";
+
+        f << "[SDS011]\n"
+          << "enabled = " << (config.sds011Enabled ? "true" : "false") << "\n";
+        if (!config.sds011Devices.empty()) {
+            f << "devices = ";
+            for (size_t i = 0; i < config.sds011Devices.size(); ++i) {
+                if (i > 0) f << ",";
+                f << config.sds011Devices[i];
+            }
+            f << "\n";
+        }
+
+        return true;
     }
 }

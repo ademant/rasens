@@ -10,6 +10,7 @@
 
 #include "config.hpp"
 #include "utils.hpp"
+#include "scanner.hpp"
 
 // Global flag for graceful shutdown
 static volatile bool running = true;
@@ -130,26 +131,44 @@ void runService(const rpi::ServiceConfig& config) {
         // Read EE895 CO2 sensor if enabled in config
         if (config.ee895Enabled) {
             std::vector<rpi::SensorReading> readings = rpi::readEE895Sensor(
-                config.ee895I2CBus, 
-                config.ee895I2CAddress, 
+                config.ee895I2CBus,
+                config.ee895I2CAddress,
                 config.ee895SensorId
             );
-            
-            // Print sensor readings in the format: hostname/sensor/id/measurement : value
+
             for (const auto& reading : readings) {
-                std::cout << hostname << "/" << reading.sensor_type << "/" 
-                          << reading.sensor_id << "/" << reading.measurement 
+                std::cout << hostname << "/" << reading.sensor_type << "/"
+                          << reading.sensor_id << "/" << reading.measurement
                           << " : " << std::fixed << std::setprecision(1) << reading.value << std::endl;
-                
-                // Also log to file if configured
+
                 if (!config.logFile.empty() && config.sensorLogging) {
-                    logMessage("INFO", hostname + "/" + reading.sensor_type + "/" + 
-                              reading.sensor_id + "/" + reading.measurement + " : " + 
+                    logMessage("INFO", hostname + "/" + reading.sensor_type + "/" +
+                              reading.sensor_id + "/" + reading.measurement + " : " +
                               std::to_string(reading.value), config.logFile);
                 }
             }
         }
-        
+
+        // Read SDS011 dust sensors if enabled
+        if (config.sds011Enabled) {
+            for (const auto& devicePath : config.sds011Devices) {
+                std::string sensorId = devicePath.substr(devicePath.find_last_of('/') + 1);
+                std::vector<rpi::SensorReading> readings = rpi::readSDS011Sensor(devicePath, sensorId);
+
+                for (const auto& reading : readings) {
+                    std::cout << hostname << "/" << reading.sensor_type << "/"
+                              << reading.sensor_id << "/" << reading.measurement
+                              << " : " << std::fixed << std::setprecision(1) << reading.value << std::endl;
+
+                    if (!config.logFile.empty() && config.sensorLogging) {
+                        logMessage("INFO", hostname + "/" + reading.sensor_type + "/" +
+                                  reading.sensor_id + "/" + reading.measurement + " : " +
+                                  std::to_string(reading.value), config.logFile);
+                    }
+                }
+            }
+        }
+
         // Sleep for poll interval
         usleep(config.pollIntervalMs * 1000);
         counter++;
@@ -192,7 +211,8 @@ int main(int argc, char* argv[]) {
     bool showConfig = false;
     bool showInfo = false;
     bool daemonMode = false;
-    
+    bool doScan = false;
+
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--config" || arg == "-c") {
@@ -201,11 +221,14 @@ int main(int argc, char* argv[]) {
             showInfo = true;
         } else if (arg == "--daemon" || arg == "-d") {
             daemonMode = true;
+        } else if (arg == "--scan" || arg == "-s") {
+            doScan = true;
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: rasens [OPTIONS]" << std::endl;
             std::cout << "  --config, -c    Show configuration and exit" << std::endl;
             std::cout << "  --info, -i      Show system information and exit" << std::endl;
             std::cout << "  --daemon, -d    Run as daemon (background)" << std::endl;
+            std::cout << "  --scan, -s      Detect sensors and write config, then exit" << std::endl;
             std::cout << "  --help, -h      Show this help message" << std::endl;
             return 0;
         }
@@ -219,7 +242,16 @@ int main(int argc, char* argv[]) {
     
     // Load configuration
     rpi::ServiceConfig config = rpi::loadServiceConfig();
-    
+
+    // Scan sensors, update and write config, then exit
+    if (doScan) {
+        rpi::scanAndUpdateConfig(config);
+        if (rpi::writeServiceConfig(config)) {
+            std::cout << "[SCAN] Config written to " << config.configPath << std::endl;
+        }
+        return 0;
+    }
+
     // Show config and exit if requested
     if (showConfig) {
         displayConfigAndExit(config);
