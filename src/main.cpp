@@ -33,11 +33,11 @@ void openLogFile(const std::string& path) {
     g_logStream.open(path, std::ios::app);
 }
 
-void signalHandler(int signal) {
+void signalHandler(int) {
     running = 0;
 }
 
-void sighupHandler(int signal) {
+void sighupHandler(int) {
     reloadRequested = 1;
 }
 

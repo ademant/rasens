@@ -132,18 +132,15 @@ bool rpi::setupGPIO() {
     return false;
 }
 
-bool rpi::setPinMode(int pin, PinMode mode) {
-    // Implementation placeholder
+bool rpi::setPinMode(int, PinMode) {
     return false;
 }
 
-bool rpi::digitalWrite(int pin, bool value) {
-    // Implementation placeholder
+bool rpi::digitalWrite(int, bool) {
     return false;
 }
 
-bool rpi::digitalRead(int pin) {
-    // Implementation placeholder
+bool rpi::digitalRead(int) {
     return false;
 }
 
@@ -231,7 +228,7 @@ std::vector<rpi::SensorReading> rpi::readEE895Sensor(int i2cBus, const std::stri
 // ============================================================================
 
 rpi::SDS011Reading rpi::readSDS011(const std::string& devicePath) {
-    SDS011Reading reading = {0.0, 0.0, false};
+    SDS011Reading reading = {0.0f, 0.0f, 0, false};
     
     int fd = open(devicePath.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
     if (fd < 0) {
