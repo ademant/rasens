@@ -1,4 +1,5 @@
 #include "config.hpp"
+#include "utils.hpp"
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -136,6 +137,21 @@ namespace rpi {
         return instance;
     }
     
+    static std::vector<std::string> parseList(const std::string& str) {
+        std::vector<std::string> result;
+        std::istringstream ss(str);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            auto s = token.begin();
+            while (s != token.end() && std::isspace((unsigned char)*s)) ++s;
+            auto e = token.end();
+            while (e != s && std::isspace((unsigned char)*(e - 1))) --e;
+            std::string trimmed(s, e);
+            if (!trimmed.empty()) result.push_back(trimmed);
+        }
+        return result;
+    }
+
     ServiceConfig loadServiceConfig() {
         ServiceConfig config;
         ConfigParser& parser = getConfig();
@@ -185,20 +201,22 @@ namespace rpi {
 
         // SDS011 dust sensor
         config.sds011Enabled = parser.getBool("SDS011", "enabled", false);
-        std::string devicesStr = parser.getString("SDS011", "devices", "");
-        if (!devicesStr.empty()) {
-            std::istringstream ss(devicesStr);
-            std::string token;
-            while (std::getline(ss, token, ',')) {
-                auto s = token.begin();
-                while (s != token.end() && std::isspace((unsigned char)*s)) ++s;
-                auto e = token.end();
-                while (e != s && std::isspace((unsigned char)*(e - 1))) --e;
-                std::string trimmed(s, e);
-                if (!trimmed.empty())
-                    config.sds011Devices.push_back(trimmed);
-            }
-        }
+        config.sds011Devices = parseList(parser.getString("SDS011", "devices", ""));
+
+        // INA219 power monitor
+        config.ina219Enabled = parser.getBool("INA219", "enabled", false);
+        config.ina219I2CBus = parser.getInt("INA219", "i2c_bus", 1);
+        config.ina219I2CAddress = parser.getInt("INA219", "i2c_address", INA219_I2C_ADDRESS_0);
+        config.ina219SensorId = parser.getString("INA219", "sensor_id", "ina219-1");
+        config.ina219ShuntResistance = 0.1;
+        try {
+            config.ina219ShuntResistance = std::stod(parser.getString("INA219", "shunt_resistance", "0.1"));
+        } catch (...) {}
+
+        // VE.Direct serial telemetry
+        config.vedirectEnabled = parser.getBool("VEDirect", "enabled", false);
+        config.vedirectDevices = parseList(parser.getString("VEDirect", "devices", ""));
+        config.vedirectSensorIds = parseList(parser.getString("VEDirect", "sensor_ids", ""));
 
         return config;
     }
@@ -252,6 +270,33 @@ namespace rpi {
             for (size_t i = 0; i < config.sds011Devices.size(); ++i) {
                 if (i > 0) f << ",";
                 f << config.sds011Devices[i];
+            }
+            f << "\n";
+        }
+        f << "\n";
+
+        f << "[INA219]\n"
+          << "enabled = " << (config.ina219Enabled ? "true" : "false") << "\n"
+          << "i2c_bus = " << config.ina219I2CBus << "\n"
+          << "i2c_address = 0x" << std::hex << config.ina219I2CAddress << std::dec << "\n"
+          << "sensor_id = " << config.ina219SensorId << "\n"
+          << "shunt_resistance = " << config.ina219ShuntResistance << "\n\n";
+
+        f << "[VEDirect]\n"
+          << "enabled = " << (config.vedirectEnabled ? "true" : "false") << "\n";
+        if (!config.vedirectDevices.empty()) {
+            f << "devices = ";
+            for (size_t i = 0; i < config.vedirectDevices.size(); ++i) {
+                if (i > 0) f << ",";
+                f << config.vedirectDevices[i];
+            }
+            f << "\n";
+        }
+        if (!config.vedirectSensorIds.empty()) {
+            f << "sensor_ids = ";
+            for (size_t i = 0; i < config.vedirectSensorIds.size(); ++i) {
+                if (i > 0) f << ",";
+                f << config.vedirectSensorIds[i];
             }
             f << "\n";
         }

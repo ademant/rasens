@@ -8,18 +8,22 @@
 #include <unistd.h>
 #include <iomanip>
 #include <vector>
+#include <memory>
 
 #include "config.hpp"
 #include "utils.hpp"
 #include "scanner.hpp"
 
-// Global flag for graceful shutdown
 static volatile sig_atomic_t running = 1;
+static volatile sig_atomic_t reloadRequested = 0;
 static std::string globalPidFile;
 
-// Signal handler for graceful shutdown
 void signalHandler(int signal) {
     running = 0;
+}
+
+void sighupHandler(int signal) {
+    reloadRequested = 1;
 }
 
 // Cleanup function for atexit
@@ -95,53 +99,82 @@ void setupGPIOPins(const std::unordered_map<std::string, std::string>& gpioPins)
 }
 
 // Main service loop
-void runService(const rpi::ServiceConfig& config, bool runOnce = false, bool stdoutOnly = false) {
-    const std::string& logFile = stdoutOnly ? std::string{} : config.logFile;
+void runService(rpi::ServiceConfig config, bool runOnce, bool stdoutOnly) {
+    std::string logFile = stdoutOnly ? std::string{} : config.logFile;
+    std::string hostname = rpi::getHostname();
 
     if (!runOnce) {
         logMessage("INFO", "Starting " + config.name + " service", logFile);
         logMessage("INFO", "Log level: " + config.logLevel, logFile);
         logMessage("INFO", "Configuration loaded successfully", logFile);
+        if (config.gpioEnabled) {
+            logMessage("INFO", "GPIO support enabled", logFile);
+            setupGPIOPins(config.gpioPins);
+        }
+        if (config.networkEnabled)
+            logMessage("INFO", "Network enabled on port " + std::to_string(config.port), logFile);
     }
 
-    // Get hostname for sensor output
-    std::string hostname = rpi::getHostname();
+    // Start VE.Direct reader threads — one per device
+    std::vector<std::unique_ptr<rpi::VEDirectReader>> vedirectReaders;
+    auto initVEDirectReaders = [&]() {
+        vedirectReaders.clear(); // destroys old readers and joins their threads
+        if (!config.vedirectEnabled) return;
+        for (size_t i = 0; i < config.vedirectDevices.size(); ++i) {
+            const std::string& dev = config.vedirectDevices[i];
+            std::string id = (i < config.vedirectSensorIds.size())
+                ? config.vedirectSensorIds[i]
+                : dev.substr(dev.find_last_of('/') + 1);
+            vedirectReaders.push_back(std::make_unique<rpi::VEDirectReader>(dev, id));
+        }
+    };
+    initVEDirectReaders();
 
-    // Setup GPIO if enabled
-    if (!runOnce && config.gpioEnabled) {
-        logMessage("INFO", "GPIO support enabled", logFile);
-        setupGPIOPins(config.gpioPins);
+    // In --once mode, wait up to 3s for VE.Direct readers to receive their first frame
+    if (runOnce) {
+        for (auto& reader : vedirectReaders)
+            reader->waitForReading(3000);
     }
 
-    // Setup network if enabled
-    if (!runOnce && config.networkEnabled) {
-        logMessage("INFO", "Network enabled on port " + std::to_string(config.port), logFile);
-        // TODO: Start network server
-    }
-
-    // Main loop
     unsigned int counter = 0;
     do {
-        if (config.sensorLogging && !stdoutOnly && counter % 10 == 0) {
-            logMessage("DEBUG", "Polling sensors...", logFile);
+        if (reloadRequested) {
+            config = rpi::loadServiceConfig();
+            if (!stdoutOnly) logFile = config.logFile;
+            reloadRequested = 0;
+            initVEDirectReaders();
+            logMessage("INFO", "Configuration reloaded", logFile);
         }
+
+        bool logToFile = config.sensorLogging && !stdoutOnly;
 
         if (config.ds18b20Enabled) {
             for (const auto& r : rpi::readAllDSTemperatureSensors())
-                printReading(hostname, r, logFile, config.sensorLogging && !stdoutOnly);
+                printReading(hostname, r, logFile, logToFile);
         }
 
         if (config.ee895Enabled) {
             for (const auto& r : rpi::readEE895Sensor(config.ee895I2CBus, config.ee895I2CAddress, config.ee895SensorId))
-                printReading(hostname, r, logFile, config.sensorLogging && !stdoutOnly);
+                printReading(hostname, r, logFile, logToFile);
         }
 
         if (config.sds011Enabled) {
-            for (const auto& devicePath : config.sds011Devices) {
-                std::string sensorId = devicePath.substr(devicePath.find_last_of('/') + 1);
-                for (const auto& r : rpi::readSDS011Sensor(devicePath, sensorId))
-                    printReading(hostname, r, logFile, config.sensorLogging && !stdoutOnly);
+            for (const auto& dev : config.sds011Devices) {
+                std::string id = dev.substr(dev.find_last_of('/') + 1);
+                for (const auto& r : rpi::readSDS011Sensor(dev, id))
+                    printReading(hostname, r, logFile, logToFile);
             }
+        }
+
+        if (config.ina219Enabled) {
+            for (const auto& r : rpi::readINA219Sensor(config.ina219I2CBus, config.ina219I2CAddress,
+                                                        config.ina219SensorId, config.ina219ShuntResistance))
+                printReading(hostname, r, logFile, logToFile);
+        }
+
+        for (auto& reader : vedirectReaders) {
+            for (const auto& r : reader->getReadings())
+                printReading(hostname, r, logFile, logToFile);
         }
 
         if (!runOnce) usleep(config.pollIntervalMs * 1000);
@@ -177,11 +210,25 @@ void displayConfigAndExit(const rpi::ServiceConfig& config) {
         for (const auto& dev : config.sds011Devices)
             std::cout << "  Device: " << dev << std::endl;
     }
-    
-    std::cout << "\nGPIO Pins:" << std::endl;
-    for (const auto& [pin, cfg] : config.gpioPins) {
-        std::cout << "  " << pin << " = " << cfg << std::endl;
+    std::cout << "INA219 Enabled: " << (config.ina219Enabled ? "Yes" : "No") << std::endl;
+    if (config.ina219Enabled) {
+        std::cout << "  I2C Bus: " << config.ina219I2CBus << std::endl;
+        std::cout << "  I2C Address: 0x" << std::hex << config.ina219I2CAddress << std::dec << std::endl;
+        std::cout << "  Sensor ID: " << config.ina219SensorId << std::endl;
+        std::cout << "  Shunt Resistance: " << config.ina219ShuntResistance << " Ohm" << std::endl;
     }
+    std::cout << "VEDirect Enabled: " << (config.vedirectEnabled ? "Yes" : "No") << std::endl;
+    if (config.vedirectEnabled) {
+        for (size_t i = 0; i < config.vedirectDevices.size(); ++i) {
+            std::cout << "  Device: " << config.vedirectDevices[i];
+            if (i < config.vedirectSensorIds.size())
+                std::cout << " (id: " << config.vedirectSensorIds[i] << ")";
+            std::cout << std::endl;
+        }
+    }
+    std::cout << "\nGPIO Pins:" << std::endl;
+    for (const auto& [pin, cfg] : config.gpioPins)
+        std::cout << "  " << pin << " = " << cfg << std::endl;
     std::cout << "=====================================" << std::endl;
     exit(0);
 }
@@ -248,7 +295,7 @@ int main(int argc, char* argv[]) {
     // Setup signal handlers for graceful shutdown
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
-    signal(SIGHUP, signalHandler);
+    signal(SIGHUP, sighupHandler);
 
     // Daemon mode: fork into background before writing PID file
     if (daemonMode) {
@@ -282,7 +329,6 @@ int main(int argc, char* argv[]) {
         atexit(cleanupPidFile);
     }
     
-    // Run the service
     runService(config, runOnce, stdoutOnly);
     
     return 0;

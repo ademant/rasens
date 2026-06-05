@@ -17,6 +17,7 @@
 #include <termios.h>
 #include <string.h>
 #include <glob.h>
+#include <unordered_map>
 
 std::string rpi::getPlatformInfo() {
     #ifdef __ARM_ARCH
@@ -449,11 +450,261 @@ std::string rpi::detectSDS011Device() {
 std::vector<rpi::SensorReading> rpi::readSDS011Sensor(const std::string& devicePath, const std::string& sensorId) {
     std::vector<SensorReading> readings;
     SDS011Reading rawReading = readSDS011(devicePath);
-    
+
     if (rawReading.valid) {
         readings.push_back({"sds011", sensorId, "pm2_5", rawReading.pm2_5});
         readings.push_back({"sds011", sensorId, "pm10", rawReading.pm10});
     }
-    
+
     return readings;
+}
+
+// ============================================================================
+// INA219 Current/Voltage/Power Monitor
+// ============================================================================
+
+bool rpi::readINA219(int fd, double shuntResistance,
+                     double& busVoltage, double& shuntVoltage,
+                     double& current, double& power)
+{
+    // current_LSB = 100µA gives up to 3.2A range with good resolution
+    const double currentLSB = 0.0001;
+    uint16_t cal = static_cast<uint16_t>(0.04096 / (currentLSB * shuntResistance));
+    uint8_t calBuf[3] = {0x05, static_cast<uint8_t>(cal >> 8), static_cast<uint8_t>(cal & 0xFF)};
+    if (write(fd, calBuf, 3) != 3) return false;
+
+    usleep(2000); // allow conversion cycle to complete
+
+    uint8_t reg, buf[2];
+
+    // Shunt voltage register 0x01: signed 16-bit, 10µV LSB
+    reg = 0x01;
+    if (write(fd, &reg, 1) != 1) return false;
+    if (read(fd, buf, 2) != 2) return false;
+    shuntVoltage = static_cast<int16_t>((buf[0] << 8) | buf[1]) * 0.00001;
+
+    // Bus voltage register 0x02: bits 15:3 unsigned, 4mV LSB
+    reg = 0x02;
+    if (write(fd, &reg, 1) != 1) return false;
+    if (read(fd, buf, 2) != 2) return false;
+    busVoltage = (static_cast<uint16_t>((buf[0] << 8) | buf[1]) >> 3) * 0.004;
+
+    // Current register 0x04: signed 16-bit, currentLSB per LSB
+    reg = 0x04;
+    if (write(fd, &reg, 1) != 1) return false;
+    if (read(fd, buf, 2) != 2) return false;
+    current = static_cast<int16_t>((buf[0] << 8) | buf[1]) * currentLSB;
+
+    // Power register 0x03: unsigned 16-bit, 20 * currentLSB per LSB
+    reg = 0x03;
+    if (write(fd, &reg, 1) != 1) return false;
+    if (read(fd, buf, 2) != 2) return false;
+    power = static_cast<uint16_t>((buf[0] << 8) | buf[1]) * 20.0 * currentLSB;
+
+    return true;
+}
+
+std::vector<rpi::SensorReading> rpi::readINA219Sensor(int i2cBus, int address,
+                                                        const std::string& sensorId,
+                                                        double shuntResistance)
+{
+    std::vector<SensorReading> readings;
+    int fd = openI2CDevice(i2cBus, address);
+    if (fd < 0) return readings;
+
+    double busVoltage, shuntVoltage, current, power;
+    if (readINA219(fd, shuntResistance, busVoltage, shuntVoltage, current, power)) {
+        readings.push_back({"ina219", sensorId, "bus_voltage",   busVoltage});
+        readings.push_back({"ina219", sensorId, "shunt_voltage", shuntVoltage});
+        readings.push_back({"ina219", sensorId, "current",       current});
+        readings.push_back({"ina219", sensorId, "power",         power});
+    }
+
+    closeI2CDevice(fd);
+    return readings;
+}
+
+// ============================================================================
+// VE.Direct Serial Telemetry
+// ============================================================================
+
+static void setupVEDirectPort(int fd) {
+    struct termios tty;
+    memset(&tty, 0, sizeof(tty));
+    tcgetattr(fd, &tty);
+    cfsetispeed(&tty, B19200);
+    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;
+    tty.c_iflag &= ~IGNBRK;
+    tty.c_lflag = 0;
+    tty.c_oflag = 0;
+    tty.c_cc[VMIN] = 0;
+    tty.c_cc[VTIME] = 10; // 1 second read timeout
+    tty.c_iflag &= ~(IXON | IXOFF | IXANY);
+    tty.c_cflag |= (CLOCAL | CREAD);
+    tty.c_cflag &= ~(PARENB | PARODD | CSTOPB | CRTSCTS);
+    tcsetattr(fd, TCSANOW, &tty);
+    tcflush(fd, TCIFLUSH);
+}
+
+std::vector<rpi::SensorReading> rpi::VEDirectReader::parseFrame(
+    const std::string& sensorId,
+    const std::map<std::string, std::string>& kv)
+{
+    static const std::unordered_map<std::string, std::pair<std::string, double>> known = {
+        {"V",    {"battery_voltage",   0.001}},
+        {"VS",   {"starter_voltage",   0.001}},
+        {"VM",   {"mid_voltage",       0.001}},
+        {"VPV",  {"panel_voltage",     0.001}},
+        {"PPV",  {"panel_power",       1.0}},
+        {"I",    {"battery_current",   0.001}},
+        {"IL",   {"load_current",      0.001}},
+        {"T",    {"battery_temp",      1.0}},
+        {"P",    {"instantaneous_power",1.0}},
+        {"CE",   {"consumed_energy",   0.001}},
+        {"SOC",  {"state_of_charge",   0.1}},
+        {"TTG",  {"time_to_go",        1.0}},
+        {"ERR",  {"error_code",        1.0}},
+        {"CS",   {"charge_state",      1.0}},
+        {"MPPT", {"mppt_mode",         1.0}},
+        {"H1",   {"depth_deepest_discharge", 0.001}},
+        {"H2",   {"depth_last_discharge",    0.001}},
+        {"H3",   {"depth_avg_discharge",     0.001}},
+        {"H4",   {"charge_cycles",           1.0}},
+        {"H5",   {"full_discharges",         1.0}},
+        {"H6",   {"cumulative_energy",       0.001}},
+        {"H7",   {"min_voltage",             0.001}},
+        {"H8",   {"max_voltage",             0.001}},
+        {"H9",   {"seconds_since_full",      1.0}},
+        {"H17",  {"yield_total_discharged",  0.01}},
+        {"H18",  {"yield_total_charged",     0.01}},
+        {"H19",  {"yield_total",             0.01}},
+        {"H20",  {"yield_today",             0.01}},
+        {"H21",  {"max_power_today",         1.0}},
+        {"H22",  {"yield_yesterday",         0.01}},
+        {"H23",  {"max_power_yesterday",     1.0}},
+        {"HSDS", {"day_sequence",            1.0}},
+    };
+
+    std::vector<SensorReading> readings;
+    for (const auto& [label, rawVal] : kv) {
+        auto it = known.find(label);
+        std::string measurement = (it != known.end()) ? it->second.first : label;
+        double scale = (it != known.end()) ? it->second.second : 1.0;
+        try {
+            double raw = std::stod(rawVal);
+            readings.push_back({"vedirect", sensorId, measurement, raw * scale});
+        } catch (...) {
+            // non-numeric value (PID hex string, SER#, etc.) — skip
+        }
+    }
+    return readings;
+}
+
+void rpi::VEDirectReader::threadFunc() {
+    while (!stop_) {
+        int fd = open(devicePath_.c_str(), O_RDONLY | O_NOCTTY);
+        if (fd < 0) {
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            continue;
+        }
+        setupVEDirectPort(fd);
+
+        std::map<std::string, std::string> frame;
+        uint8_t checksum = 0;
+        std::string lineBuf;
+
+        while (!stop_) {
+            uint8_t c;
+            if (read(fd, &c, 1) != 1) continue; // timeout, check stop_
+
+            checksum += c;
+
+            if (c == '\n') {
+                if (!lineBuf.empty() && lineBuf.back() == '\r')
+                    lineBuf.pop_back();
+
+                auto tab = lineBuf.find('\t');
+                if (tab != std::string::npos) {
+                    std::string key = lineBuf.substr(0, tab);
+                    std::string val = lineBuf.substr(tab + 1);
+
+                    if (key == "Checksum") {
+                        if (checksum == 0 && !frame.empty()) {
+                            auto readings = parseFrame(sensorId_, frame);
+                            std::lock_guard<std::mutex> lock(mutex_);
+                            snapshot_ = std::move(readings);
+                        }
+                        frame.clear();
+                        checksum = 0;
+                    } else {
+                        frame[key] = val;
+                    }
+                }
+                lineBuf.clear();
+            } else {
+                lineBuf += static_cast<char>(c);
+            }
+        }
+
+        close(fd);
+    }
+}
+
+rpi::VEDirectReader::VEDirectReader(const std::string& devicePath, const std::string& sensorId)
+    : devicePath_(devicePath), sensorId_(sensorId), thread_([this]{ threadFunc(); })
+{}
+
+rpi::VEDirectReader::~VEDirectReader() {
+    stop_ = true;
+    thread_.join();
+}
+
+std::vector<rpi::SensorReading> rpi::VEDirectReader::getReadings() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return snapshot_;
+}
+
+bool rpi::VEDirectReader::waitForReading(int timeoutMs) const {
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!snapshot_.empty()) return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    return false;
+}
+
+bool rpi::isVEDirectDevice(const std::string& devicePath) {
+    int fd = open(devicePath.c_str(), O_RDONLY | O_NOCTTY);
+    if (fd < 0) return false;
+
+    struct termios tty;
+    memset(&tty, 0, sizeof(tty));
+    tcgetattr(fd, &tty);
+    cfsetispeed(&tty, B19200);
+    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;
+    tty.c_iflag = 0;
+    tty.c_lflag = 0;
+    tty.c_oflag = 0;
+    tty.c_cc[VMIN] = 0;
+    tty.c_cc[VTIME] = 20; // 2 second timeout
+    tty.c_cflag |= (CLOCAL | CREAD);
+    tty.c_cflag &= ~(PARENB | PARODD | CSTOPB | CRTSCTS);
+    tcsetattr(fd, TCSANOW, &tty);
+    tcflush(fd, TCIFLUSH);
+
+    // Read a burst and look for CRLF + tab — the VE.Direct signature
+    char buf[256];
+    ssize_t n = read(fd, buf, sizeof(buf));
+    close(fd);
+
+    if (n < 4) return false;
+    bool hasCRLF = false, hasTab = false;
+    for (ssize_t i = 0; i < n; i++) {
+        if (buf[i] == '\t') hasTab = true;
+        if (i + 1 < n && buf[i] == '\r' && buf[i+1] == '\n') hasCRLF = true;
+    }
+    return hasCRLF && hasTab;
 }
