@@ -430,6 +430,7 @@ std::vector<rpi::SensorReading> rpi::readINA219Sensor(int i2cBus, int address,
                                                         float shuntResistance)
 {
     std::vector<SensorReading> readings;
+    if (address == 0) return readings;
     int fd = openI2CDevice(i2cBus, address);
     if (fd < 0) return readings;
 
@@ -547,49 +548,49 @@ std::vector<rpi::SensorReading> rpi::VEDirectReader::parseFrame(
     const std::string& sensorId,
     const std::map<std::string, std::string>& kv)
 {
-    static const std::unordered_map<std::string, std::pair<std::string, double>> known = {
-        {"V",    {"battery_voltage",   0.001}},
-        {"VS",   {"starter_voltage",   0.001}},
-        {"VM",   {"mid_voltage",       0.001}},
-        {"VPV",  {"panel_voltage",     0.001}},
-        {"PPV",  {"panel_power",       1.0}},
-        {"I",    {"battery_current",   0.001}},
-        {"IL",   {"load_current",      0.001}},
-        {"T",    {"battery_temp",      1.0}},
-        {"P",    {"instantaneous_power",1.0}},
-        {"CE",   {"consumed_energy",   0.001}},
-        {"SOC",  {"state_of_charge",   0.1}},
-        {"TTG",  {"time_to_go",        1.0}},
-        {"ERR",  {"error_code",        1.0}},
-        {"CS",   {"charge_state",      1.0}},
-        {"MPPT", {"mppt_mode",         1.0}},
-        {"H1",   {"depth_deepest_discharge", 0.001}},
-        {"H2",   {"depth_last_discharge",    0.001}},
-        {"H3",   {"depth_avg_discharge",     0.001}},
-        {"H4",   {"charge_cycles",           1.0}},
-        {"H5",   {"full_discharges",         1.0}},
-        {"H6",   {"cumulative_energy",       0.001}},
-        {"H7",   {"min_voltage",             0.001}},
-        {"H8",   {"max_voltage",             0.001}},
-        {"H9",   {"seconds_since_full",      1.0}},
-        {"H17",  {"yield_total_discharged",  0.01}},
-        {"H18",  {"yield_total_charged",     0.01}},
-        {"H19",  {"yield_total",             0.01}},
-        {"H20",  {"yield_today",             0.01}},
-        {"H21",  {"max_power_today",         1.0}},
-        {"H22",  {"yield_yesterday",         0.01}},
-        {"H23",  {"max_power_yesterday",     1.0}},
-        {"HSDS", {"day_sequence",            1.0}},
+    static const std::unordered_map<std::string, std::pair<std::string, float>> known = {
+        {"V",    {"battery_voltage",   0.001f}},
+        {"VS",   {"starter_voltage",   0.001f}},
+        {"VM",   {"mid_voltage",       0.001f}},
+        {"VPV",  {"panel_voltage",     0.001f}},
+        {"PPV",  {"panel_power",       1.0f}},
+        {"I",    {"battery_current",   0.001f}},
+        {"IL",   {"load_current",      0.001f}},
+        {"T",    {"battery_temp",      1.0f}},
+        {"P",    {"instantaneous_power",1.0f}},
+        {"CE",   {"consumed_energy",   0.001f}},
+        {"SOC",  {"state_of_charge",   0.1f}},
+        {"TTG",  {"time_to_go",        1.0f}},
+        {"ERR",  {"error_code",        1.0f}},
+        {"CS",   {"charge_state",      1.0f}},
+        {"MPPT", {"mppt_mode",         1.0f}},
+        {"H1",   {"depth_deepest_discharge", 0.001f}},
+        {"H2",   {"depth_last_discharge",    0.001f}},
+        {"H3",   {"depth_avg_discharge",     0.001f}},
+        {"H4",   {"charge_cycles",           1.0f}},
+        {"H5",   {"full_discharges",         1.0f}},
+        {"H6",   {"cumulative_energy",       0.001f}},
+        {"H7",   {"min_voltage",             0.001f}},
+        {"H8",   {"max_voltage",             0.001f}},
+        {"H9",   {"seconds_since_full",      1.0f}},
+        {"H17",  {"yield_total_discharged",  0.01f}},
+        {"H18",  {"yield_total_charged",     0.01f}},
+        {"H19",  {"yield_total",             0.01f}},
+        {"H20",  {"yield_today",             0.01f}},
+        {"H21",  {"max_power_today",         1.0f}},
+        {"H22",  {"yield_yesterday",         0.01f}},
+        {"H23",  {"max_power_yesterday",     1.0f}},
+        {"HSDS", {"day_sequence",            1.0f}},
     };
 
     std::vector<SensorReading> readings;
     for (const auto& [label, rawVal] : kv) {
         auto it = known.find(label);
         std::string measurement = (it != known.end()) ? it->second.first : label;
-        double scale = (it != known.end()) ? it->second.second : 1.0;
+        float scale = (it != known.end()) ? it->second.second : 1.0f;
         try {
             float raw = std::stof(rawVal);
-            readings.push_back({"vedirect", sensorId, measurement, raw * static_cast<float>(scale)});
+            readings.push_back({"vedirect", sensorId, measurement, raw * scale});
         } catch (...) {
             // non-numeric value (PID hex string, SER#, etc.) — skip
         }

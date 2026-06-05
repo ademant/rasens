@@ -67,31 +67,30 @@ void scanAndUpdateConfig(ServiceConfig& config) {
         if (!verified.empty() && verified.size() == config.sds011Devices.size()) {
             std::cout << "[SCAN] SDS011: " << verified.size()
                       << " device(s) already configured and responding, skipping\n";
-            return;
-        }
-
-        // Scan for new devices, starting from any already-verified ones
-        std::cout << "[SCAN] SDS011: scanning serial devices...\n";
-        std::vector<std::string> found = verified;
-
-        for (const auto& info : scanSerialDevices()) {
-            bool alreadyKnown = false;
-            for (const auto& f : found) {
-                if (f == info.devicePath) { alreadyKnown = true; break; }
-            }
-            if (alreadyKnown) continue;
-
-            std::cout << "[SCAN] SDS011: probing " << info.devicePath << "...\n";
-            if (isSDS011AtDevice(info.devicePath)) {
-                found.push_back(info.devicePath);
-                std::cout << "[SCAN] SDS011: found at " << info.devicePath << "\n";
-            }
-        }
-
-        if (found.empty()) {
-            std::cerr << "[SCAN] WARNING: SDS011 enabled but no device found - check USB connection\n";
         } else {
-            config.sds011Devices = found;
+            // Scan for new devices, starting from any already-verified ones
+            std::cout << "[SCAN] SDS011: scanning serial devices...\n";
+            std::vector<std::string> found = verified;
+
+            for (const auto& info : scanSerialDevices()) {
+                bool alreadyKnown = false;
+                for (const auto& f : found) {
+                    if (f == info.devicePath) { alreadyKnown = true; break; }
+                }
+                if (alreadyKnown) continue;
+
+                std::cout << "[SCAN] SDS011: probing " << info.devicePath << "...\n";
+                if (isSDS011AtDevice(info.devicePath)) {
+                    found.push_back(info.devicePath);
+                    std::cout << "[SCAN] SDS011: found at " << info.devicePath << "\n";
+                }
+            }
+
+            if (found.empty()) {
+                std::cerr << "[SCAN] WARNING: SDS011 enabled but no device found - check USB connection\n";
+            } else {
+                config.sds011Devices = found;
+            }
         }
     }
 
@@ -134,29 +133,28 @@ void scanAndUpdateConfig(ServiceConfig& config) {
         if (!verified.empty() && verified.size() == config.vedirectDevices.size()) {
             std::cout << "[SCAN] VEDirect: " << verified.size()
                       << " device(s) already configured and responding, skipping\n";
-            return;
-        }
+        } else {
+            std::cout << "[SCAN] VEDirect: scanning serial devices...\n";
+            std::vector<std::string> found = verified;
 
-        std::cout << "[SCAN] VEDirect: scanning serial devices...\n";
-        std::vector<std::string> found = verified;
+            for (const auto& info : scanSerialDevices()) {
+                bool alreadyKnown = false;
+                for (const auto& f : found)
+                    if (f == info.devicePath) { alreadyKnown = true; break; }
+                if (alreadyKnown) continue;
 
-        for (const auto& info : scanSerialDevices()) {
-            bool alreadyKnown = false;
-            for (const auto& f : found)
-                if (f == info.devicePath) { alreadyKnown = true; break; }
-            if (alreadyKnown) continue;
-
-            std::cout << "[SCAN] VEDirect: probing " << info.devicePath << "...\n";
-            if (isVEDirectDevice(info.devicePath)) {
-                found.push_back(info.devicePath);
-                std::cout << "[SCAN] VEDirect: found at " << info.devicePath << "\n";
+                std::cout << "[SCAN] VEDirect: probing " << info.devicePath << "...\n";
+                if (isVEDirectDevice(info.devicePath)) {
+                    found.push_back(info.devicePath);
+                    std::cout << "[SCAN] VEDirect: found at " << info.devicePath << "\n";
+                }
             }
-        }
 
-        if (found.empty())
-            std::cerr << "[SCAN] WARNING: VEDirect enabled but no device found - check USB connection\n";
-        else
-            config.vedirectDevices = found;
+            if (found.empty())
+                std::cerr << "[SCAN] WARNING: VEDirect enabled but no device found - check USB connection\n";
+            else
+                config.vedirectDevices = found;
+        }
     }
 }
 

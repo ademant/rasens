@@ -76,7 +76,7 @@ static std::string formatValue(float v) {
     return buf;
 }
 
-void logMessage(const std::string& level, const std::string& message, const std::string& logFile = "") {
+void logMessage(const std::string& level, const std::string& message) {
     std::string formatted = "[" + level + "] " + message;
     std::cout << formatted << "\n";
 
@@ -87,13 +87,17 @@ void logMessage(const std::string& level, const std::string& message, const std:
     }
 }
 
-static void printReading(const std::string& hostname, const rpi::SensorReading& r,
-                         const std::string& logFile, bool logEnabled) {
+static void printReading(const std::string& hostname, const rpi::SensorReading& r, bool logEnabled) {
     std::string line = hostname + "/" + r.sensor_type + "/" + r.sensor_id + "/" + r.measurement
                      + " : " + formatValue(r.value);
     std::cout << line << "\n";
-    if (!logFile.empty() && logEnabled)
-        logMessage("INFO", line, logFile);
+    if (logEnabled) {
+        std::lock_guard<std::mutex> lock(g_logMutex);
+        if (g_logStream.is_open()) {
+            g_logStream << line << "\n";
+            g_logStream.flush();
+        }
+    }
 }
 
 // Setup GPIO pins from configuration
@@ -112,24 +116,23 @@ void setupGPIOPins(const std::unordered_map<std::string, std::string>& gpioPins)
 
 // Main service loop
 void runService(rpi::ServiceConfig config, bool runOnce, bool stdoutOnly) {
-    std::string logFile = stdoutOnly ? std::string{} : config.logFile;
     std::string hostname = rpi::getHostname();
 
+    // Open persistent log file (single open, not per-write)
+    if (!stdoutOnly && !config.logFile.empty())
+        openLogFile(config.logFile);
+
     if (!runOnce) {
-        logMessage("INFO", "Starting " + config.name + " service", logFile);
-        logMessage("INFO", "Log level: " + config.logLevel, logFile);
-        logMessage("INFO", "Configuration loaded successfully", logFile);
+        logMessage("INFO", "Starting " + config.name + " service");
+        logMessage("INFO", "Log level: " + config.logLevel);
+        logMessage("INFO", "Configuration loaded successfully");
         if (config.gpioEnabled) {
-            logMessage("INFO", "GPIO support enabled", logFile);
+            logMessage("INFO", "GPIO support enabled");
             setupGPIOPins(config.gpioPins);
         }
         if (config.networkEnabled)
-            logMessage("INFO", "Network enabled on port " + std::to_string(config.port), logFile);
+            logMessage("INFO", "Network enabled on port " + std::to_string(config.port));
     }
-
-    // Open persistent log file (single open, not per-write)
-    if (!stdoutOnly && !logFile.empty())
-        openLogFile(logFile);
 
     // Start SDS011 reader threads — one per device
     std::vector<std::unique_ptr<rpi::SDS011Reader>> sds011Readers;
@@ -171,44 +174,42 @@ void runService(rpi::ServiceConfig config, bool runOnce, bool stdoutOnly) {
         if (reloadRequested) {
             config = rpi::loadServiceConfig();
             reloadRequested = 0;
-            if (!stdoutOnly) {
-                logFile = config.logFile;
-                openLogFile(logFile);
-            }
+            if (!stdoutOnly)
+                openLogFile(config.logFile);
             initSDS011Readers();
             initVEDirectReaders();
-            logMessage("INFO", "Configuration reloaded", logFile);
+            logMessage("INFO", "Configuration reloaded");
         }
 
-        bool logToFile = config.sensorLogging && !stdoutOnly;
+        bool logToFile = config.sensorLogging && !stdoutOnly && g_logStream.is_open();
 
         if (config.ds18b20Enabled)
             for (const auto& r : rpi::readAllDSTemperatureSensors())
-                printReading(hostname, r, logFile, logToFile);
+                printReading(hostname, r, logToFile);
 
         if (config.ee895Enabled)
             for (const auto& r : rpi::readEE895Sensor(config.ee895I2CBus, config.ee895I2CAddress, config.ee895SensorId))
-                printReading(hostname, r, logFile, logToFile);
+                printReading(hostname, r, logToFile);
 
         for (auto& reader : sds011Readers)
             for (const auto& r : reader->getReadings())
-                printReading(hostname, r, logFile, logToFile);
+                printReading(hostname, r, logToFile);
 
         if (config.ina219Enabled)
             for (const auto& r : rpi::readINA219Sensor(config.ina219I2CBus, config.ina219I2CAddress,
                                                         config.ina219SensorId, config.ina219ShuntResistance))
-                printReading(hostname, r, logFile, logToFile);
+                printReading(hostname, r, logToFile);
 
         for (auto& reader : vedirectReaders)
             for (const auto& r : reader->getReadings())
-                printReading(hostname, r, logFile, logToFile);
+                printReading(hostname, r, logToFile);
 
         if (!runOnce) usleep(config.pollIntervalMs * 1000);
         counter++;
     } while (!runOnce && running);
 
     if (!runOnce)
-        logMessage("INFO", "Service shutting down gracefully", logFile);
+        logMessage("INFO", "Service shutting down gracefully");
 }
 
 // Display configuration and exit (for testing)
@@ -327,7 +328,7 @@ int main(int argc, char* argv[]) {
     if (daemonMode) {
         pid_t pid = fork();
         if (pid < 0) {
-            logMessage("ERROR", "Failed to fork", config.logFile);
+            logMessage("ERROR", "Failed to fork");
             return 1;
         } else if (pid > 0) {
             // Parent exits without touching the PID file
@@ -348,7 +349,7 @@ int main(int argc, char* argv[]) {
     if (!config.pidFile.empty()) {
         ensureDirectoriesExist(config.pidFile);
         if (!writePidFile(config.pidFile)) {
-            logMessage("ERROR", "Failed to write PID file: " + config.pidFile, config.logFile);
+            logMessage("ERROR", "Failed to write PID file: " + config.pidFile);
             return 1;
         }
         globalPidFile = config.pidFile;
