@@ -197,6 +197,11 @@ void displayConfigAndExit(const rpi::ServiceConfig& config) {
         std::cout << "  I2C Address: 0x" << std::hex << config.ee895I2CAddress << std::dec << std::endl;
         std::cout << "  Sensor ID: " << config.ee895SensorId << std::endl;
     }
+    std::cout << "SDS011 Enabled: " << (config.sds011Enabled ? "Yes" : "No") << std::endl;
+    if (config.sds011Enabled) {
+        for (const auto& dev : config.sds011Devices)
+            std::cout << "  Device: " << dev << std::endl;
+    }
     
     std::cout << "\nGPIO Pins:" << std::endl;
     for (const auto& [pin, cfg] : config.gpioPins) {

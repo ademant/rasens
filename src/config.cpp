@@ -170,16 +170,18 @@ namespace rpi {
                 config.gpioPins[key] = parser.getString("GPIO", key, "");
         }
 
-        // Sensors section
+        // Sensors section (general)
         config.pollIntervalMs = parser.getInt("Sensors", "poll_interval_ms", 1000);
         config.sensorLogging = parser.getBool("Sensors", "enable_logging", true);
-        config.ds18b20Enabled = parser.getBool("Sensors", "ds18b20_enabled", true);
+
+        // DS18B20
+        config.ds18b20Enabled = parser.getBool("DS18B20", "enabled", true);
 
         // EE895 CO2 sensor
-        config.ee895Enabled = parser.getBool("Sensors", "ee895_enabled", false);
-        config.ee895I2CBus = parser.getInt("Sensors", "ee895_i2c_bus", 1);
-        config.ee895I2CAddress = parser.getInt("Sensors", "ee895_i2c_address", 0);
-        config.ee895SensorId = parser.getString("Sensors", "ee895_sensor_id", "ee895-1");
+        config.ee895Enabled = parser.getBool("EE895", "enabled", false);
+        config.ee895I2CBus = parser.getInt("EE895", "i2c_bus", 1);
+        config.ee895I2CAddress = parser.getInt("EE895", "i2c_address", 0);
+        config.ee895SensorId = parser.getString("EE895", "sensor_id", "ee895-1");
 
         // SDS011 dust sensor
         config.sds011Enabled = parser.getBool("SDS011", "enabled", false);
@@ -232,12 +234,16 @@ namespace rpi {
 
         f << "[Sensors]\n"
           << "poll_interval_ms = " << config.pollIntervalMs << "\n"
-          << "enable_logging = " << (config.sensorLogging ? "true" : "false") << "\n"
-          << "ds18b20_enabled = " << (config.ds18b20Enabled ? "true" : "false") << "\n"
-          << "ee895_enabled = " << (config.ee895Enabled ? "true" : "false") << "\n"
-          << "ee895_i2c_bus = " << config.ee895I2CBus << "\n"
-          << "ee895_i2c_address = 0x" << std::hex << config.ee895I2CAddress << std::dec << "\n"
-          << "ee895_sensor_id = " << config.ee895SensorId << "\n\n";
+          << "enable_logging = " << (config.sensorLogging ? "true" : "false") << "\n\n";
+
+        f << "[DS18B20]\n"
+          << "enabled = " << (config.ds18b20Enabled ? "true" : "false") << "\n\n";
+
+        f << "[EE895]\n"
+          << "enabled = " << (config.ee895Enabled ? "true" : "false") << "\n"
+          << "i2c_bus = " << config.ee895I2CBus << "\n"
+          << "i2c_address = 0x" << std::hex << config.ee895I2CAddress << std::dec << "\n"
+          << "sensor_id = " << config.ee895SensorId << "\n\n";
 
         f << "[SDS011]\n"
           << "enabled = " << (config.sds011Enabled ? "true" : "false") << "\n";
