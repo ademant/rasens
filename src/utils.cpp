@@ -2,21 +2,22 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
-#include <unistd.h>
-#include <dirent.h>
-#include <sys/stat.h>
+#include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <unistd.h>
+#include <dirent.h>
 #include <fcntl.h>
+#include <glob.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <linux/i2c-dev.h>
+#include <termios.h>
 #include <iomanip>
 #include <vector>
 #include <thread>
 #include <chrono>
-#include <termios.h>
-#include <string.h>
-#include <glob.h>
 #include <unordered_map>
 
 std::string rpi::getPlatformInfo() {

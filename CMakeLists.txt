@@ -72,6 +72,8 @@ else()
     message(STATUS "Building with -O2 optimisation")
 endif()
 
+add_compile_options(-Wall -Wextra)
+
 # Raspberry Pi Zero tuning (ARMv6 + VFPv2 hard-float)
 option(RPI_ZERO "Optimise for Raspberry Pi Zero (ARMv6)" OFF)
 if(RPI_ZERO)
