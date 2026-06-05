@@ -25,7 +25,7 @@ void scanAndUpdateConfig(ServiceConfig& config) {
         } else {
             std::cout << "[SCAN] EE895: probing I2C bus " << config.ee895I2CBus << "...\n";
             bool found = false;
-            for (int addr : {EE895_I2C_ADDRESS_DEFAULT, EE895_I2C_ADDRESS_ALT}) {
+            for (int addr : {EE895_I2C_ADDRESS_DEFAULT, EE895_I2C_ADDRESS_ALT, 0x5E, 0x5F}) {
                 if (ee895RespondsAt(config.ee895I2CBus, addr)) {
                     config.ee895I2CAddress = addr;
                     std::cout << "[SCAN] EE895: found at 0x" << std::hex << addr << std::dec << "\n";

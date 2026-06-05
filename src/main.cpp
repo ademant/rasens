@@ -3,6 +3,7 @@
 #include <fstream>
 #include <csignal>
 #include <cstdlib>
+#include <cstdio>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <iomanip>
@@ -13,12 +14,12 @@
 #include "scanner.hpp"
 
 // Global flag for graceful shutdown
-static volatile bool running = true;
+static volatile sig_atomic_t running = 1;
 static std::string globalPidFile;
 
 // Signal handler for graceful shutdown
 void signalHandler(int signal) {
-    running = false;
+    running = 0;
 }
 
 // Cleanup function for atexit
@@ -43,20 +44,29 @@ void removePidFile(const std::string& pidFile) {
     std::remove(pidFile.c_str());
 }
 
-// Create directories if they don't exist
+// Create directories if they don't exist (equivalent to mkdir -p)
 void ensureDirectoriesExist(const std::string& path) {
     size_t pos = path.find_last_of('/');
-    if (pos != std::string::npos) {
-        std::string dir = path.substr(0, pos);
-        mkdir(dir.c_str(), 0755);
+    if (pos == std::string::npos) return;
+    std::string dir = path.substr(0, pos);
+    for (size_t i = 1; i <= dir.size(); ++i) {
+        if (i == dir.size() || dir[i] == '/') {
+            mkdir(dir.substr(0, i).c_str(), 0755);
+        }
     }
+}
+
+static std::string formatValue(double v) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%g", v);
+    return buf;
 }
 
 // Simple logging function
 void logMessage(const std::string& level, const std::string& message, const std::string& logFile = "") {
     std::string formatted = "[" + level + "] " + message;
     std::cout << formatted << std::endl;
-    
+
     if (!logFile.empty()) {
         ensureDirectoriesExist(logFile);
         std::ofstream file(logFile, std::ios::app);
@@ -64,6 +74,15 @@ void logMessage(const std::string& level, const std::string& message, const std:
             file << formatted << std::endl;
         }
     }
+}
+
+static void printReading(const std::string& hostname, const rpi::SensorReading& r,
+                         const std::string& logFile, bool logEnabled) {
+    std::string line = hostname + "/" + r.sensor_type + "/" + r.sensor_id + "/" + r.measurement
+                     + " : " + formatValue(r.value);
+    std::cout << line << "\n";
+    if (!logFile.empty() && logEnabled)
+        logMessage("INFO", line, logFile);
 }
 
 // Setup GPIO pins from configuration
@@ -102,70 +121,28 @@ void runService(const rpi::ServiceConfig& config) {
     }
     
     // Main loop
-    int counter = 0;
+    unsigned int counter = 0;
     while (running) {
         // Sensor polling
         if (config.sensorLogging && counter % 10 == 0) {
             logMessage("DEBUG", "Polling sensors...", config.logFile);
         }
         
-        // Read all DS18B20 temperature sensors if enabled in config
         if (config.ds18b20Enabled) {
-            std::vector<rpi::SensorReading> readings = rpi::readAllDSTemperatureSensors();
-            
-            // Print sensor readings in the format: hostname/sensor/id/measurement : value
-            for (const auto& reading : readings) {
-                std::cout << hostname << "/" << reading.sensor_type << "/" 
-                          << reading.sensor_id << "/" << reading.measurement 
-                          << " : " << std::fixed << std::setprecision(1) << reading.value << std::endl;
-                
-                // Also log to file if configured
-                if (!config.logFile.empty() && config.sensorLogging) {
-                    logMessage("INFO", hostname + "/" + reading.sensor_type + "/" + 
-                              reading.sensor_id + "/" + reading.measurement + " : " + 
-                              std::to_string(reading.value), config.logFile);
-                }
-            }
+            for (const auto& r : rpi::readAllDSTemperatureSensors())
+                printReading(hostname, r, config.logFile, config.sensorLogging);
         }
-        
-        // Read EE895 CO2 sensor if enabled in config
+
         if (config.ee895Enabled) {
-            std::vector<rpi::SensorReading> readings = rpi::readEE895Sensor(
-                config.ee895I2CBus,
-                config.ee895I2CAddress,
-                config.ee895SensorId
-            );
-
-            for (const auto& reading : readings) {
-                std::cout << hostname << "/" << reading.sensor_type << "/"
-                          << reading.sensor_id << "/" << reading.measurement
-                          << " : " << std::fixed << std::setprecision(1) << reading.value << std::endl;
-
-                if (!config.logFile.empty() && config.sensorLogging) {
-                    logMessage("INFO", hostname + "/" + reading.sensor_type + "/" +
-                              reading.sensor_id + "/" + reading.measurement + " : " +
-                              std::to_string(reading.value), config.logFile);
-                }
-            }
+            for (const auto& r : rpi::readEE895Sensor(config.ee895I2CBus, config.ee895I2CAddress, config.ee895SensorId))
+                printReading(hostname, r, config.logFile, config.sensorLogging);
         }
 
-        // Read SDS011 dust sensors if enabled
         if (config.sds011Enabled) {
             for (const auto& devicePath : config.sds011Devices) {
                 std::string sensorId = devicePath.substr(devicePath.find_last_of('/') + 1);
-                std::vector<rpi::SensorReading> readings = rpi::readSDS011Sensor(devicePath, sensorId);
-
-                for (const auto& reading : readings) {
-                    std::cout << hostname << "/" << reading.sensor_type << "/"
-                              << reading.sensor_id << "/" << reading.measurement
-                              << " : " << std::fixed << std::setprecision(1) << reading.value << std::endl;
-
-                    if (!config.logFile.empty() && config.sensorLogging) {
-                        logMessage("INFO", hostname + "/" + reading.sensor_type + "/" +
-                                  reading.sensor_id + "/" + reading.measurement + " : " +
-                                  std::to_string(reading.value), config.logFile);
-                    }
-                }
+                for (const auto& r : rpi::readSDS011Sensor(devicePath, sensorId))
+                    printReading(hostname, r, config.logFile, config.sensorLogging);
             }
         }
 
@@ -266,8 +243,29 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
     signal(SIGHUP, signalHandler);
-    
-    // Write PID file
+
+    // Daemon mode: fork into background before writing PID file
+    if (daemonMode) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            logMessage("ERROR", "Failed to fork", config.logFile);
+            return 1;
+        } else if (pid > 0) {
+            // Parent exits without touching the PID file
+            return 0;
+        }
+
+        // Child process continues
+        setsid();
+        umask(0);
+
+        // Close standard file descriptors
+        close(STDIN_FILENO);
+        close(STDOUT_FILENO);
+        close(STDERR_FILENO);
+    }
+
+    // Write PID file after fork so only the running process owns it
     if (!config.pidFile.empty()) {
         ensureDirectoriesExist(config.pidFile);
         if (!writePidFile(config.pidFile)) {
@@ -276,27 +274,6 @@ int main(int argc, char* argv[]) {
         }
         globalPidFile = config.pidFile;
         atexit(cleanupPidFile);
-    }
-    
-    // Daemon mode: fork into background
-    if (daemonMode) {
-        pid_t pid = fork();
-        if (pid < 0) {
-            logMessage("ERROR", "Failed to fork", config.logFile);
-            return 1;
-        } else if (pid > 0) {
-            // Parent process exits
-            return 0;
-        }
-        
-        // Child process continues
-        setsid();
-        umask(0);
-        
-        // Close standard file descriptors
-        close(STDIN_FILENO);
-        close(STDOUT_FILENO);
-        close(STDERR_FILENO);
     }
     
     // Run the service
