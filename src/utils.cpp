@@ -11,6 +11,12 @@
 #include <sys/ioctl.h>
 #include <linux/i2c-dev.h>
 #include <iomanip>
+#include <vector>
+#include <thread>
+#include <chrono>
+#include <termios.h>
+#include <string.h>
+#include <glob.h>
 
 std::string rpi::getPlatformInfo() {
     #ifdef __ARM_ARCH
@@ -188,23 +194,20 @@ int rpi::openI2CDevice(int i2cBus, int address) {
     return fd;
 }
 
-// Close I2C device
-void closeI2CDevice(int fd) {
+static void closeI2CDevice(int fd) {
     if (fd >= 0) {
         close(fd);
     }
 }
 
-// Read from I2C device - helper function
-bool i2cReadBytes(int fd, uint8_t* buffer, int length) {
+static bool i2cReadBytes(int fd, uint8_t* buffer, int length) {
     if (read(fd, buffer, length) != length) {
         return false;
     }
     return true;
 }
 
-// Write to I2C device - helper function
-bool i2cWriteBytes(int fd, const uint8_t* buffer, int length) {
+static bool i2cWriteBytes(int fd, const uint8_t* buffer, int length) {
     if (write(fd, buffer, length) != length) {
         return false;
     }
@@ -293,4 +296,164 @@ std::vector<rpi::SensorReading> rpi::readEE895Sensor(int i2cBus, const std::stri
     }
     // Try alternate address
     return readEE895Sensor(i2cBus, EE895_I2C_ADDRESS_ALT, sensorId);
+}
+
+// ============================================================================
+// SDS011 Dust Sensor Implementation
+// Based on the working C program at /home/ademant/src/rasens/sds011/sds011.c
+// ============================================================================
+
+rpi::SDS011Reading rpi::readSDS011(const std::string& devicePath) {
+    SDS011Reading reading = {0.0, 0.0, false};
+    
+    int fd = open(devicePath.c_str(), O_RDWR | O_NOCTTY | O_SYNC);
+    if (fd < 0) {
+        // Try without O_SYNC
+        fd = open(devicePath.c_str(), O_RDWR | O_NOCTTY);
+        if (fd < 0) {
+            return reading;
+        }
+    }
+    
+    // Configure serial port - exactly as the working C program does
+    struct termios tty;
+    memset(&tty, 0, sizeof tty);
+    if (tcgetattr(fd, &tty) != 0) {
+        close(fd);
+        return reading;
+    }
+    
+    cfsetospeed(&tty, B9600);
+    cfsetispeed(&tty, B9600);
+    
+    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;
+    tty.c_iflag &= ~IGNBRK;
+    tty.c_lflag = 0;
+    tty.c_oflag = 0;
+    tty.c_cc[VMIN] = 0;
+    tty.c_cc[VTIME] = 5;
+    tty.c_iflag &= ~(IXON | IXOFF | IXANY);
+    tty.c_cflag |= (CLOCAL | CREAD);
+    tty.c_cflag &= ~(PARENB | PARODD);
+    tty.c_cflag &= ~CSTOPB;
+    tty.c_cflag &= ~CRTSCTS;
+    
+    if (tcsetattr(fd, TCSANOW, &tty) != 0) {
+        close(fd);
+        return reading;
+    }
+    
+    // Flush any stale data
+    tcflush(fd, TCIFLUSH);
+
+    // Accumulate bytes and scan for a valid framed packet (start=0xAA, tail=0xAB)
+    uint8_t buf[10];
+    int collected = 0;
+    for (int attempt = 0; attempt < 40 && !reading.valid; attempt++) {
+        ssize_t n = read(fd, buf + collected, sizeof(buf) - collected);
+        if (n > 0) collected += n;
+
+        // Slide through collected bytes looking for a complete valid packet
+        while (collected >= 10) {
+            if (buf[0] == 0xAA && buf[1] == 0xC0 && buf[9] == 0xAB) {
+                uint8_t checksum = 0;
+                for (int i = 2; i <= 7; i++) checksum += buf[i];
+                if (checksum == buf[8]) {
+                    float ppm_25 = ((buf[3] << 8) | buf[2]) / 10.0f;
+                    float ppm_10 = ((buf[5] << 8) | buf[4]) / 10.0f;
+                    reading.pm2_5 = ppm_25;
+                    reading.pm10 = ppm_10;
+                    reading.valid = true;
+                    break;
+                }
+            }
+            // Discard first byte and try to re-sync
+            memmove(buf, buf + 1, --collected);
+        }
+        if (!reading.valid) usleep(50000);
+    }
+    
+    close(fd);
+    return reading;
+}
+
+bool rpi::isSDS011AtDevice(const std::string& devicePath) {
+    SDS011Reading reading = readSDS011(devicePath);
+    return reading.valid;
+}
+
+std::vector<rpi::SerialDeviceInfo> rpi::scanSerialDevices() {
+    std::vector<SerialDeviceInfo> devices;
+    
+    std::vector<std::string> patterns = {
+        "/dev/ttyUSB*",
+        "/dev/ttyACM*",
+        "/dev/ttyS*",
+        "/dev/serial/by-id/*",
+        "/dev/serial/by-path/*"
+    };
+    
+    for (const auto& pattern : patterns) {
+        glob_t globResult;
+        if (glob(pattern.c_str(), GLOB_NOSORT, nullptr, &globResult) == 0) {
+            for (size_t i = 0; i < globResult.gl_pathc; i++) {
+                std::string devicePath = globResult.gl_pathv[i];
+                
+                bool alreadyAdded = false;
+                for (const auto& existing : devices) {
+                    if (existing.devicePath == devicePath) {
+                        alreadyAdded = true;
+                        break;
+                    }
+                }
+                
+                if (!alreadyAdded) {
+                    SerialDeviceInfo info;
+                    info.devicePath = devicePath;
+                    info.name = "Unknown";
+                    info.manufacturer = "";
+                    info.serialNumber = "";
+                    
+                    if (devicePath.find("/dev/serial/by-id/") != std::string::npos) {
+                        info.name = "USB Serial by ID";
+                    } else if (devicePath.find("/dev/serial/by-path/") != std::string::npos) {
+                        info.name = "USB Serial by Path";
+                    } else if (devicePath.find("ttyUSB") != std::string::npos) {
+                        info.name = "USB Serial Converter";
+                    } else if (devicePath.find("ttyACM") != std::string::npos) {
+                        info.name = "CDC-ACM Device";
+                    } else if (devicePath.find("ttyS") != std::string::npos) {
+                        info.name = "Built-in Serial";
+                    }
+                    
+                    devices.push_back(info);
+                }
+            }
+            globfree(&globResult);
+        }
+    }
+    
+    return devices;
+}
+
+std::string rpi::detectSDS011Device() {
+    std::vector<SerialDeviceInfo> devices = scanSerialDevices();
+    for (const auto& device : devices) {
+        if (isSDS011AtDevice(device.devicePath)) {
+            return device.devicePath;
+        }
+    }
+    return "";
+}
+
+std::vector<rpi::SensorReading> rpi::readSDS011Sensor(const std::string& devicePath, const std::string& sensorId) {
+    std::vector<SensorReading> readings;
+    SDS011Reading rawReading = readSDS011(devicePath);
+    
+    if (rawReading.valid) {
+        readings.push_back({"sds011", sensorId, "pm2_5", rawReading.pm2_5});
+        readings.push_back({"sds011", sensorId, "pm10", rawReading.pm10});
+    }
+    
+    return readings;
 }

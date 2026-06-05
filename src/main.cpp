@@ -39,11 +39,6 @@ bool writePidFile(const std::string& pidFile) {
     return true;
 }
 
-// Remove PID file
-void removePidFile(const std::string& pidFile) {
-    std::remove(pidFile.c_str());
-}
-
 // Create directories if they don't exist (equivalent to mkdir -p)
 void ensureDirectoriesExist(const std::string& path) {
     size_t pos = path.find_last_of('/');
@@ -100,58 +95,61 @@ void setupGPIOPins(const std::unordered_map<std::string, std::string>& gpioPins)
 }
 
 // Main service loop
-void runService(const rpi::ServiceConfig& config) {
-    logMessage("INFO", "Starting " + config.name + " service", config.logFile);
-    logMessage("INFO", "Log level: " + config.logLevel, config.logFile);
-    logMessage("INFO", "Configuration loaded successfully", config.logFile);
-    
+void runService(const rpi::ServiceConfig& config, bool runOnce = false, bool stdoutOnly = false) {
+    const std::string& logFile = stdoutOnly ? std::string{} : config.logFile;
+
+    if (!runOnce) {
+        logMessage("INFO", "Starting " + config.name + " service", logFile);
+        logMessage("INFO", "Log level: " + config.logLevel, logFile);
+        logMessage("INFO", "Configuration loaded successfully", logFile);
+    }
+
     // Get hostname for sensor output
     std::string hostname = rpi::getHostname();
-    
+
     // Setup GPIO if enabled
-    if (config.gpioEnabled) {
-        logMessage("INFO", "GPIO support enabled", config.logFile);
+    if (!runOnce && config.gpioEnabled) {
+        logMessage("INFO", "GPIO support enabled", logFile);
         setupGPIOPins(config.gpioPins);
     }
-    
+
     // Setup network if enabled
-    if (config.networkEnabled) {
-        logMessage("INFO", "Network enabled on port " + std::to_string(config.port), config.logFile);
+    if (!runOnce && config.networkEnabled) {
+        logMessage("INFO", "Network enabled on port " + std::to_string(config.port), logFile);
         // TODO: Start network server
     }
-    
+
     // Main loop
     unsigned int counter = 0;
-    while (running) {
-        // Sensor polling
-        if (config.sensorLogging && counter % 10 == 0) {
-            logMessage("DEBUG", "Polling sensors...", config.logFile);
+    do {
+        if (config.sensorLogging && !stdoutOnly && counter % 10 == 0) {
+            logMessage("DEBUG", "Polling sensors...", logFile);
         }
-        
+
         if (config.ds18b20Enabled) {
             for (const auto& r : rpi::readAllDSTemperatureSensors())
-                printReading(hostname, r, config.logFile, config.sensorLogging);
+                printReading(hostname, r, logFile, config.sensorLogging && !stdoutOnly);
         }
 
         if (config.ee895Enabled) {
             for (const auto& r : rpi::readEE895Sensor(config.ee895I2CBus, config.ee895I2CAddress, config.ee895SensorId))
-                printReading(hostname, r, config.logFile, config.sensorLogging);
+                printReading(hostname, r, logFile, config.sensorLogging && !stdoutOnly);
         }
 
         if (config.sds011Enabled) {
             for (const auto& devicePath : config.sds011Devices) {
                 std::string sensorId = devicePath.substr(devicePath.find_last_of('/') + 1);
                 for (const auto& r : rpi::readSDS011Sensor(devicePath, sensorId))
-                    printReading(hostname, r, config.logFile, config.sensorLogging);
+                    printReading(hostname, r, logFile, config.sensorLogging && !stdoutOnly);
             }
         }
 
-        // Sleep for poll interval
-        usleep(config.pollIntervalMs * 1000);
+        if (!runOnce) usleep(config.pollIntervalMs * 1000);
         counter++;
-    }
-    
-    logMessage("INFO", "Service shutting down gracefully", config.logFile);
+    } while (!runOnce && running);
+
+    if (!runOnce)
+        logMessage("INFO", "Service shutting down gracefully", logFile);
 }
 
 // Display configuration and exit (for testing)
@@ -194,6 +192,8 @@ int main(int argc, char* argv[]) {
     bool showInfo = false;
     bool daemonMode = false;
     bool doScan = false;
+    bool runOnce = false;
+    bool stdoutOnly = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -205,12 +205,18 @@ int main(int argc, char* argv[]) {
             daemonMode = true;
         } else if (arg == "--scan" || arg == "-s") {
             doScan = true;
+        } else if (arg == "--once") {
+            runOnce = true;
+        } else if (arg == "--stdout") {
+            stdoutOnly = true;
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: rasens [OPTIONS]" << std::endl;
             std::cout << "  --config, -c    Show configuration and exit" << std::endl;
             std::cout << "  --info, -i      Show system information and exit" << std::endl;
             std::cout << "  --daemon, -d    Run as daemon (background)" << std::endl;
             std::cout << "  --scan, -s      Detect sensors and write config, then exit" << std::endl;
+            std::cout << "  --once          Read all sensors once and exit" << std::endl;
+            std::cout << "  --stdout        Print to stdout only, suppress file logging" << std::endl;
             std::cout << "  --help, -h      Show this help message" << std::endl;
             return 0;
         }
@@ -277,7 +283,7 @@ int main(int argc, char* argv[]) {
     }
     
     // Run the service
-    runService(config);
+    runService(config, runOnce, stdoutOnly);
     
     return 0;
 }
