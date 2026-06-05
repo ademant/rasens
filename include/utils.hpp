@@ -65,6 +65,7 @@ namespace rpi {
     struct SDS011Reading {
         float pm2_5;
         float pm10;
+        uint16_t deviceId;
         bool valid;
     };
 
@@ -88,12 +89,12 @@ namespace rpi {
     // Read from SDS011 sensor
     SDS011Reading readSDS011(const std::string& devicePath);
 
-    // Read from SDS011 sensor at specified device path (used by scanner)
-    std::vector<SensorReading> readSDS011Sensor(const std::string& devicePath, const std::string& sensorId);
+    // Read from SDS011 sensor at specified device path; sensor_id taken from packet device ID
+    std::vector<SensorReading> readSDS011Sensor(const std::string& devicePath);
 
     class SDS011Reader {
     public:
-        SDS011Reader(const std::string& devicePath, const std::string& sensorId);
+        explicit SDS011Reader(const std::string& devicePath);
         ~SDS011Reader();
         SDS011Reader(const SDS011Reader&) = delete;
         SDS011Reader& operator=(const SDS011Reader&) = delete;
@@ -102,7 +103,6 @@ namespace rpi {
     private:
         void threadFunc();
         std::string devicePath_;
-        std::string sensorId_;
         mutable std::mutex mutex_;
         std::vector<SensorReading> snapshot_;
         std::atomic<bool> stop_{false};

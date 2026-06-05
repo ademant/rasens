@@ -88,7 +88,7 @@ void logMessage(const std::string& level, const std::string& message) {
 }
 
 static void printReading(const std::string& hostname, const rpi::SensorReading& r, bool logEnabled) {
-    std::string line = hostname + "/" + r.sensor_type + "/" + r.sensor_id + "/" + r.measurement
+    std::string line = "sensors/" + hostname + "/" + r.sensor_type + "/" + r.sensor_id + "/" + r.measurement
                      + " : " + formatValue(r.value);
     std::cout << line << "\n";
     if (logEnabled) {
@@ -139,10 +139,8 @@ void runService(rpi::ServiceConfig config, bool runOnce, bool stdoutOnly) {
     auto initSDS011Readers = [&]() {
         sds011Readers.clear();
         if (!config.sds011Enabled) return;
-        for (const auto& dev : config.sds011Devices) {
-            std::string id = dev.substr(dev.find_last_of('/') + 1);
-            sds011Readers.push_back(std::make_unique<rpi::SDS011Reader>(dev, id));
-        }
+        for (const auto& dev : config.sds011Devices)
+            sds011Readers.push_back(std::make_unique<rpi::SDS011Reader>(dev));
     };
     initSDS011Readers();
 

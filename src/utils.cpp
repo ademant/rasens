@@ -286,11 +286,10 @@ rpi::SDS011Reading rpi::readSDS011(const std::string& devicePath) {
                 uint8_t checksum = 0;
                 for (int i = 2; i <= 7; i++) checksum += buf[i];
                 if (checksum == buf[8]) {
-                    float ppm_25 = ((buf[3] << 8) | buf[2]) / 10.0f;
-                    float ppm_10 = ((buf[5] << 8) | buf[4]) / 10.0f;
-                    reading.pm2_5 = ppm_25;
-                    reading.pm10 = ppm_10;
-                    reading.valid = true;
+                    reading.pm2_5    = ((buf[3] << 8) | buf[2]) / 10.0f;
+                    reading.pm10     = ((buf[5] << 8) | buf[4]) / 10.0f;
+                    reading.deviceId = static_cast<uint16_t>((buf[7] << 8) | buf[6]);
+                    reading.valid    = true;
                     break;
                 }
             }
@@ -299,7 +298,7 @@ rpi::SDS011Reading rpi::readSDS011(const std::string& devicePath) {
         }
         if (!reading.valid) usleep(50000);
     }
-    
+
     close(fd);
     return reading;
 }
@@ -373,13 +372,17 @@ std::string rpi::detectSDS011Device() {
     return "";
 }
 
-std::vector<rpi::SensorReading> rpi::readSDS011Sensor(const std::string& devicePath, const std::string& sensorId) {
+std::vector<rpi::SensorReading> rpi::readSDS011Sensor(const std::string& devicePath) {
     std::vector<SensorReading> readings;
     SDS011Reading rawReading = readSDS011(devicePath);
 
     if (rawReading.valid) {
-        readings.push_back({"sds011", sensorId, "pm2_5", rawReading.pm2_5});
-        readings.push_back({"sds011", sensorId, "pm10", rawReading.pm10});
+        char idBuf[5];
+        std::snprintf(idBuf, sizeof(idBuf), "%04x", rawReading.deviceId);
+        std::string id(idBuf);
+        readings.push_back({"sds011", id, "pm2_5",     rawReading.pm2_5});
+        readings.push_back({"sds011", id, "pm10",      rawReading.pm10});
+        readings.push_back({"sds011", id, "device_id", static_cast<float>(rawReading.deviceId)});
     }
 
     return readings;
@@ -489,11 +492,16 @@ void rpi::SDS011Reader::threadFunc() {
                 uint8_t checksum = 0;
                 for (int i = 2; i <= 7; i++) checksum += buf[i];
                 if (checksum == buf[8]) {
+                    uint16_t devId = static_cast<uint16_t>((buf[7] << 8) | buf[6]);
+                    char idBuf[5];
+                    std::snprintf(idBuf, sizeof(idBuf), "%04x", devId);
+                    std::string id(idBuf);
                     float pm2_5 = ((buf[3] << 8) | buf[2]) / 10.0f;
                     float pm10  = ((buf[5] << 8) | buf[4]) / 10.0f;
                     std::vector<SensorReading> readings = {
-                        {"sds011", sensorId_, "pm2_5", pm2_5},
-                        {"sds011", sensorId_, "pm10",  pm10}
+                        {"sds011", id, "pm2_5",     pm2_5},
+                        {"sds011", id, "pm10",      pm10},
+                        {"sds011", id, "device_id", static_cast<float>(devId)},
                     };
                     std::lock_guard<std::mutex> lock(mutex_);
                     snapshot_ = std::move(readings);
@@ -508,8 +516,8 @@ void rpi::SDS011Reader::threadFunc() {
     }
 }
 
-rpi::SDS011Reader::SDS011Reader(const std::string& devicePath, const std::string& sensorId)
-    : devicePath_(devicePath), sensorId_(sensorId), thread_([this]{ threadFunc(); })
+rpi::SDS011Reader::SDS011Reader(const std::string& devicePath)
+    : devicePath_(devicePath), thread_([this]{ threadFunc(); })
 {}
 
 rpi::SDS011Reader::~SDS011Reader() {
