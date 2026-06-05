@@ -154,7 +154,7 @@ namespace rpi {
 
     ServiceConfig loadServiceConfig() {
         ServiceConfig config;
-        ConfigParser& parser = getConfig();
+        ConfigParser parser; // fresh instance — avoids stale keys on reload
 
         const char* envPath = std::getenv("RASENS_CONFIG");
         std::string path = envPath ? envPath : ConfigParser::DEFAULT_CONFIG_PATH;
@@ -208,9 +208,9 @@ namespace rpi {
         config.ina219I2CBus = parser.getInt("INA219", "i2c_bus", 1);
         config.ina219I2CAddress = parser.getInt("INA219", "i2c_address", INA219_I2C_ADDRESS_0);
         config.ina219SensorId = parser.getString("INA219", "sensor_id", "ina219-1");
-        config.ina219ShuntResistance = 0.1;
+        config.ina219ShuntResistance = 0.1f;
         try {
-            config.ina219ShuntResistance = std::stod(parser.getString("INA219", "shunt_resistance", "0.1"));
+            config.ina219ShuntResistance = std::stof(parser.getString("INA219", "shunt_resistance", "0.1"));
         } catch (...) {}
 
         // VE.Direct serial telemetry

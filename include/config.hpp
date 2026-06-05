@@ -69,7 +69,7 @@ namespace rpi {
         int ina219I2CBus;
         int ina219I2CAddress;
         std::string ina219SensorId;
-        double ina219ShuntResistance;
+        float ina219ShuntResistance;
         bool vedirectEnabled;
         std::vector<std::string> vedirectDevices;
         std::vector<std::string> vedirectSensorIds;

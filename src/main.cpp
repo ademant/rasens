@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <vector>
 #include <memory>
+#include <mutex>
 
 #include "config.hpp"
 #include "utils.hpp"
@@ -17,6 +18,20 @@
 static volatile sig_atomic_t running = 1;
 static volatile sig_atomic_t reloadRequested = 0;
 static std::string globalPidFile;
+
+static std::ofstream g_logStream;
+static std::mutex g_logMutex;
+
+// forward declaration — defined below
+void ensureDirectoriesExist(const std::string& path);
+
+void openLogFile(const std::string& path) {
+    if (path.empty()) return;
+    ensureDirectoriesExist(path);
+    std::lock_guard<std::mutex> lock(g_logMutex);
+    if (g_logStream.is_open()) g_logStream.close();
+    g_logStream.open(path, std::ios::app);
+}
 
 void signalHandler(int signal) {
     running = 0;
@@ -55,23 +70,20 @@ void ensureDirectoriesExist(const std::string& path) {
     }
 }
 
-static std::string formatValue(double v) {
+static std::string formatValue(float v) {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "%g", v);
     return buf;
 }
 
-// Simple logging function
 void logMessage(const std::string& level, const std::string& message, const std::string& logFile = "") {
     std::string formatted = "[" + level + "] " + message;
-    std::cout << formatted << std::endl;
+    std::cout << formatted << "\n";
 
-    if (!logFile.empty()) {
-        ensureDirectoriesExist(logFile);
-        std::ofstream file(logFile, std::ios::app);
-        if (file.is_open()) {
-            file << formatted << std::endl;
-        }
+    std::lock_guard<std::mutex> lock(g_logMutex);
+    if (g_logStream.is_open()) {
+        g_logStream << formatted << "\n";
+        g_logStream.flush();
     }
 }
 
@@ -115,10 +127,26 @@ void runService(rpi::ServiceConfig config, bool runOnce, bool stdoutOnly) {
             logMessage("INFO", "Network enabled on port " + std::to_string(config.port), logFile);
     }
 
+    // Open persistent log file (single open, not per-write)
+    if (!stdoutOnly && !logFile.empty())
+        openLogFile(logFile);
+
+    // Start SDS011 reader threads — one per device
+    std::vector<std::unique_ptr<rpi::SDS011Reader>> sds011Readers;
+    auto initSDS011Readers = [&]() {
+        sds011Readers.clear();
+        if (!config.sds011Enabled) return;
+        for (const auto& dev : config.sds011Devices) {
+            std::string id = dev.substr(dev.find_last_of('/') + 1);
+            sds011Readers.push_back(std::make_unique<rpi::SDS011Reader>(dev, id));
+        }
+    };
+    initSDS011Readers();
+
     // Start VE.Direct reader threads — one per device
     std::vector<std::unique_ptr<rpi::VEDirectReader>> vedirectReaders;
     auto initVEDirectReaders = [&]() {
-        vedirectReaders.clear(); // destroys old readers and joins their threads
+        vedirectReaders.clear();
         if (!config.vedirectEnabled) return;
         for (size_t i = 0; i < config.vedirectDevices.size(); ++i) {
             const std::string& dev = config.vedirectDevices[i];
@@ -130,8 +158,10 @@ void runService(rpi::ServiceConfig config, bool runOnce, bool stdoutOnly) {
     };
     initVEDirectReaders();
 
-    // In --once mode, wait up to 3s for VE.Direct readers to receive their first frame
+    // In --once mode, wait up to 3s for threaded readers to receive their first frame
     if (runOnce) {
+        for (auto& reader : sds011Readers)
+            reader->getReadings(); // non-blocking, just primes
         for (auto& reader : vedirectReaders)
             reader->waitForReading(3000);
     }
@@ -140,42 +170,38 @@ void runService(rpi::ServiceConfig config, bool runOnce, bool stdoutOnly) {
     do {
         if (reloadRequested) {
             config = rpi::loadServiceConfig();
-            if (!stdoutOnly) logFile = config.logFile;
             reloadRequested = 0;
+            if (!stdoutOnly) {
+                logFile = config.logFile;
+                openLogFile(logFile);
+            }
+            initSDS011Readers();
             initVEDirectReaders();
             logMessage("INFO", "Configuration reloaded", logFile);
         }
 
         bool logToFile = config.sensorLogging && !stdoutOnly;
 
-        if (config.ds18b20Enabled) {
+        if (config.ds18b20Enabled)
             for (const auto& r : rpi::readAllDSTemperatureSensors())
                 printReading(hostname, r, logFile, logToFile);
-        }
 
-        if (config.ee895Enabled) {
+        if (config.ee895Enabled)
             for (const auto& r : rpi::readEE895Sensor(config.ee895I2CBus, config.ee895I2CAddress, config.ee895SensorId))
                 printReading(hostname, r, logFile, logToFile);
-        }
 
-        if (config.sds011Enabled) {
-            for (const auto& dev : config.sds011Devices) {
-                std::string id = dev.substr(dev.find_last_of('/') + 1);
-                for (const auto& r : rpi::readSDS011Sensor(dev, id))
-                    printReading(hostname, r, logFile, logToFile);
-            }
-        }
+        for (auto& reader : sds011Readers)
+            for (const auto& r : reader->getReadings())
+                printReading(hostname, r, logFile, logToFile);
 
-        if (config.ina219Enabled) {
+        if (config.ina219Enabled)
             for (const auto& r : rpi::readINA219Sensor(config.ina219I2CBus, config.ina219I2CAddress,
                                                         config.ina219SensorId, config.ina219ShuntResistance))
                 printReading(hostname, r, logFile, logToFile);
-        }
 
-        for (auto& reader : vedirectReaders) {
+        for (auto& reader : vedirectReaders)
             for (const auto& r : reader->getReadings())
                 printReading(hostname, r, logFile, logToFile);
-        }
 
         if (!runOnce) usleep(config.pollIntervalMs * 1000);
         counter++;

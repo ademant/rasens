@@ -20,7 +20,7 @@ static bool ina219RespondsAt(int bus, int address) {
 static bool ee895RespondsAt(int bus, int address) {
     int fd = openI2CDevice(bus, address);
     if (fd < 0) return false;
-    double co2, temp, pressure;
+    float co2, temp, pressure;
     bool ok = readEE895(fd, co2, temp, pressure);
     close(fd);
     return ok;

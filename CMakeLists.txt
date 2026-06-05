@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(rasens PROJECT_VERSION "1.0.0" LANGUAGES CXX)
+project(rasens VERSION "1.0.0" LANGUAGES CXX)
 
 # Use C++17 standard
 set(CMAKE_CXX_STANDARD 17)
@@ -67,6 +67,16 @@ option(BUILD_DEBUG "Build with debug symbols" OFF)
 if(BUILD_DEBUG)
     add_compile_options(-g -DDEBUG)
     message(STATUS "Building with debug symbols")
+else()
+    add_compile_options(-O2)
+    message(STATUS "Building with -O2 optimisation")
+endif()
+
+# Raspberry Pi Zero tuning (ARMv6 + VFPv2 hard-float)
+option(RPI_ZERO "Optimise for Raspberry Pi Zero (ARMv6)" OFF)
+if(RPI_ZERO)
+    add_compile_options(-march=armv6 -mfpu=vfp -mfloat-abi=hard)
+    message(STATUS "Raspberry Pi Zero tuning enabled (-march=armv6 -mfpu=vfp -mfloat-abi=hard)")
 endif()
 
 # Enable testing

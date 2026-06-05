@@ -92,69 +92,35 @@ std::vector<std::string> rpi::findDS18B20Devices() {
     return devices;
 }
 
-// Read temperature from a DS18B20 device
-// Returns temperature in Celsius, or -999.0 on error
-double rpi::readDSTemperature(const std::string& devicePath) {
+float rpi::readDSTemperature(const std::string& devicePath) {
     std::string slavePath = devicePath + "/w1_slave";
     std::ifstream file(slavePath);
-    
-    if (!file.is_open()) {
-        return -999.0;
-    }
-    
-    std::string line;
-    std::string crcLine;
-    std::string tempLine;
-    
-    // Read the two lines from w1_slave
-    if (std::getline(file, crcLine)) {
-        if (std::getline(file, tempLine)) {
-            // Check CRC
-            if (crcLine.find("YES") != std::string::npos) {
-                // Find the temperature value: t=12345
-                size_t tempPos = tempLine.find("t=");
-                if (tempPos != std::string::npos) {
-                    std::string tempStr = tempLine.substr(tempPos + 2);
-                    try {
-                        int rawTemp = std::stoi(tempStr);
-                        // Temperature is in millidegrees Celsius
-                        return static_cast<double>(rawTemp) / 1000.0;
-                    } catch (...) {
-                        return -999.0;
-                    }
-                }
+    if (!file.is_open()) return -999.0f;
+
+    std::string crcLine, tempLine;
+    if (std::getline(file, crcLine) && std::getline(file, tempLine)) {
+        if (crcLine.find("YES") != std::string::npos) {
+            size_t tempPos = tempLine.find("t=");
+            if (tempPos != std::string::npos) {
+                try {
+                    return std::stoi(tempLine.substr(tempPos + 2)) / 1000.0f;
+                } catch (...) {}
             }
         }
     }
-    
-    return -999.0;
+    return -999.0f;
 }
 
-// Read all DS18B20 temperature sensors and return readings
 std::vector<rpi::SensorReading> rpi::readAllDSTemperatureSensors() {
     std::vector<SensorReading> readings;
-    std::vector<std::string> devices = findDS18B20Devices();
-    
-    for (const auto& devicePath : devices) {
-        // Extract sensor ID from path (e.g., "28-00000c3b4baa")
+    for (const auto& devicePath : findDS18B20Devices()) {
         size_t lastSlash = devicePath.find_last_of('/');
-        std::string sensorId = (lastSlash != std::string::npos) ? 
-                               devicePath.substr(lastSlash + 1) : devicePath;
-        
-        // Read temperature
-        double temperature = readDSTemperature(devicePath);
-        
-        // Only add valid readings (not error value)
-        if (temperature > -900.0) {
-            readings.push_back({
-                "ds18",           // sensor_type
-                sensorId,         // sensor_id
-                "temperature",    // measurement
-                temperature       // value in Celsius
-            });
-        }
+        std::string sensorId = (lastSlash != std::string::npos)
+            ? devicePath.substr(lastSlash + 1) : devicePath;
+        float temperature = readDSTemperature(devicePath);
+        if (temperature > -900.0f)
+            readings.push_back({"ds18", sensorId, "temperature", temperature});
     }
-    
     return readings;
 }
 
@@ -218,72 +184,32 @@ static bool i2cWriteBytes(int fd, const uint8_t* buffer, int length) {
 // Read EE895 sensor data
 // The EE895 provides CO2 (ppm), temperature (C), and pressure (hPa)
 // Communication protocol: Send 0x00 command, then read 9 bytes of data
-bool rpi::readEE895(int fd, double& co2, double& temperature, double& pressure) {
-    uint8_t cmd = 0x00;  // Command to read all measurements
-    uint8_t data[9] = {0};  // EE895 returns 9 bytes
-    
-    // Send read command
-    if (!i2cWriteBytes(fd, &cmd, 1)) {
-        return false;
-    }
-    
-    // Small delay for sensor to prepare data
-    usleep(50000);  // 50ms delay
-    
-    // Read 9 bytes of data
-    if (!i2cReadBytes(fd, data, 9)) {
-        return false;
-    }
-    
-    // Parse the data (EE895 format)
-    // Bytes 0-1: CO2 (unsigned int, ppm)
-    // Bytes 2-3: Temperature (signed short, x100 = °C)
-    // Bytes 4-5: Pressure (unsigned short, x10 = hPa)
-    // Bytes 6-7: Status and checksum
-    
-    uint16_t co2Raw = (data[0] << 8) | data[1];
-    int16_t tempRaw = (data[2] << 8) | data[3];
-    uint16_t pressureRaw = (data[4] << 8) | data[5];
-    
-    // Convert raw values to actual units
-    co2 = static_cast<double>(co2Raw);
-    temperature = static_cast<double>(tempRaw) / 100.0;
-    pressure = static_cast<double>(pressureRaw) / 10.0;
-    
+bool rpi::readEE895(int fd, float& co2, float& temperature, float& pressure) {
+    uint8_t cmd = 0x00;
+    uint8_t data[9] = {0};
+
+    if (!i2cWriteBytes(fd, &cmd, 1)) return false;
+    usleep(50000);
+    if (!i2cReadBytes(fd, data, 9)) return false;
+
+    co2         = static_cast<float>((data[0] << 8) | data[1]);
+    temperature = static_cast<int16_t>((data[2] << 8) | data[3]) / 100.0f;
+    pressure    = static_cast<float>((data[4] << 8) | data[5]) / 10.0f;
     return true;
 }
 
-// Read from EE895 sensor at specific address and return SensorReading vector
 std::vector<rpi::SensorReading> rpi::readEE895Sensor(int i2cBus, int address, const std::string& sensorId) {
     std::vector<SensorReading> readings;
-    
     int fd = openI2CDevice(i2cBus, address);
-    if (fd < 0) {
-        return readings;  // Could not open I2C device
-    }
-    
-    double co2, temperature, pressure;
+    if (fd < 0) return readings;
+
+    float co2, temperature, pressure;
     if (readEE895(fd, co2, temperature, pressure)) {
-        readings.push_back({
-            "ee895",
-            sensorId,
-            "co2",
-            co2
-        });
-        readings.push_back({
-            "ee895",
-            sensorId,
-            "temperature",
-            temperature
-        });
-        readings.push_back({
-            "ee895",
-            sensorId,
-            "pressure",
-            pressure
-        });
+        readings.push_back({"ee895", sensorId, "co2",         co2});
+        readings.push_back({"ee895", sensorId, "temperature", temperature});
+        readings.push_back({"ee895", sensorId, "pressure",    pressure});
     }
-    
+
     closeI2CDevice(fd);
     return readings;
 }
@@ -463,56 +389,51 @@ std::vector<rpi::SensorReading> rpi::readSDS011Sensor(const std::string& deviceP
 // INA219 Current/Voltage/Power Monitor
 // ============================================================================
 
-bool rpi::readINA219(int fd, double shuntResistance,
-                     double& busVoltage, double& shuntVoltage,
-                     double& current, double& power)
+bool rpi::readINA219(int fd, float shuntResistance,
+                     float& busVoltage, float& shuntVoltage,
+                     float& current, float& power)
 {
-    // current_LSB = 100µA gives up to 3.2A range with good resolution
-    const double currentLSB = 0.0001;
-    uint16_t cal = static_cast<uint16_t>(0.04096 / (currentLSB * shuntResistance));
+    const float currentLSB = 0.0001f;
+    uint16_t cal = static_cast<uint16_t>(0.04096f / (currentLSB * shuntResistance));
     uint8_t calBuf[3] = {0x05, static_cast<uint8_t>(cal >> 8), static_cast<uint8_t>(cal & 0xFF)};
     if (write(fd, calBuf, 3) != 3) return false;
 
-    usleep(2000); // allow conversion cycle to complete
+    usleep(2000);
 
     uint8_t reg, buf[2];
 
-    // Shunt voltage register 0x01: signed 16-bit, 10µV LSB
     reg = 0x01;
     if (write(fd, &reg, 1) != 1) return false;
     if (read(fd, buf, 2) != 2) return false;
-    shuntVoltage = static_cast<int16_t>((buf[0] << 8) | buf[1]) * 0.00001;
+    shuntVoltage = static_cast<int16_t>((buf[0] << 8) | buf[1]) * 0.00001f;
 
-    // Bus voltage register 0x02: bits 15:3 unsigned, 4mV LSB
     reg = 0x02;
     if (write(fd, &reg, 1) != 1) return false;
     if (read(fd, buf, 2) != 2) return false;
-    busVoltage = (static_cast<uint16_t>((buf[0] << 8) | buf[1]) >> 3) * 0.004;
+    busVoltage = (static_cast<uint16_t>((buf[0] << 8) | buf[1]) >> 3) * 0.004f;
 
-    // Current register 0x04: signed 16-bit, currentLSB per LSB
     reg = 0x04;
     if (write(fd, &reg, 1) != 1) return false;
     if (read(fd, buf, 2) != 2) return false;
     current = static_cast<int16_t>((buf[0] << 8) | buf[1]) * currentLSB;
 
-    // Power register 0x03: unsigned 16-bit, 20 * currentLSB per LSB
     reg = 0x03;
     if (write(fd, &reg, 1) != 1) return false;
     if (read(fd, buf, 2) != 2) return false;
-    power = static_cast<uint16_t>((buf[0] << 8) | buf[1]) * 20.0 * currentLSB;
+    power = static_cast<uint16_t>((buf[0] << 8) | buf[1]) * 20.0f * currentLSB;
 
     return true;
 }
 
 std::vector<rpi::SensorReading> rpi::readINA219Sensor(int i2cBus, int address,
                                                         const std::string& sensorId,
-                                                        double shuntResistance)
+                                                        float shuntResistance)
 {
     std::vector<SensorReading> readings;
     int fd = openI2CDevice(i2cBus, address);
     if (fd < 0) return readings;
 
-    double busVoltage, shuntVoltage, current, power;
+    float busVoltage, shuntVoltage, current, power;
     if (readINA219(fd, shuntResistance, busVoltage, shuntVoltage, current, power)) {
         readings.push_back({"ina219", sensorId, "bus_voltage",   busVoltage});
         readings.push_back({"ina219", sensorId, "shunt_voltage", shuntVoltage});
@@ -522,6 +443,82 @@ std::vector<rpi::SensorReading> rpi::readINA219Sensor(int i2cBus, int address,
 
     closeI2CDevice(fd);
     return readings;
+}
+
+// ============================================================================
+// SDS011 Threaded Reader
+// ============================================================================
+
+void rpi::SDS011Reader::threadFunc() {
+    while (!stop_) {
+        int fd = open(devicePath_.c_str(), O_RDWR | O_NOCTTY);
+        if (fd < 0) {
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            continue;
+        }
+
+        struct termios tty;
+        memset(&tty, 0, sizeof(tty));
+        tcgetattr(fd, &tty);
+        cfsetospeed(&tty, B9600);
+        cfsetispeed(&tty, B9600);
+        tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;
+        tty.c_iflag &= ~IGNBRK;
+        tty.c_lflag = 0;
+        tty.c_oflag = 0;
+        tty.c_cc[VMIN] = 0;
+        tty.c_cc[VTIME] = 10; // 1 second read timeout to allow stop_ check
+        tty.c_iflag &= ~(IXON | IXOFF | IXANY);
+        tty.c_cflag |= (CLOCAL | CREAD);
+        tty.c_cflag &= ~(PARENB | PARODD | CSTOPB | CRTSCTS);
+        tcsetattr(fd, TCSANOW, &tty);
+        tcflush(fd, TCIFLUSH);
+
+        uint8_t buf[10];
+        int collected = 0;
+
+        while (!stop_) {
+            uint8_t c;
+            if (read(fd, &c, 1) != 1) continue;
+
+            buf[collected++] = c;
+            if (collected < 10) continue;
+
+            if (buf[0] == 0xAA && buf[1] == 0xC0 && buf[9] == 0xAB) {
+                uint8_t checksum = 0;
+                for (int i = 2; i <= 7; i++) checksum += buf[i];
+                if (checksum == buf[8]) {
+                    float pm2_5 = ((buf[3] << 8) | buf[2]) / 10.0f;
+                    float pm10  = ((buf[5] << 8) | buf[4]) / 10.0f;
+                    std::vector<SensorReading> readings = {
+                        {"sds011", sensorId_, "pm2_5", pm2_5},
+                        {"sds011", sensorId_, "pm10",  pm10}
+                    };
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    snapshot_ = std::move(readings);
+                    collected = 0;
+                    continue;
+                }
+            }
+            memmove(buf, buf + 1, --collected);
+        }
+
+        close(fd);
+    }
+}
+
+rpi::SDS011Reader::SDS011Reader(const std::string& devicePath, const std::string& sensorId)
+    : devicePath_(devicePath), sensorId_(sensorId), thread_([this]{ threadFunc(); })
+{}
+
+rpi::SDS011Reader::~SDS011Reader() {
+    stop_ = true;
+    thread_.join();
+}
+
+std::vector<rpi::SensorReading> rpi::SDS011Reader::getReadings() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return snapshot_;
 }
 
 // ============================================================================
@@ -591,8 +588,8 @@ std::vector<rpi::SensorReading> rpi::VEDirectReader::parseFrame(
         std::string measurement = (it != known.end()) ? it->second.first : label;
         double scale = (it != known.end()) ? it->second.second : 1.0;
         try {
-            double raw = std::stod(rawVal);
-            readings.push_back({"vedirect", sensorId, measurement, raw * scale});
+            float raw = std::stof(rawVal);
+            readings.push_back({"vedirect", sensorId, measurement, raw * static_cast<float>(scale)});
         } catch (...) {
             // non-numeric value (PID hex string, SER#, etc.) — skip
         }

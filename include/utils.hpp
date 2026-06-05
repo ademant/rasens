@@ -34,12 +34,12 @@ namespace rpi {
         std::string sensor_type;
         std::string sensor_id;
         std::string measurement;
-        double value;
+        float value;
     };
     
     // DS18B20 1-Wire temperature sensor functions
     std::vector<SensorReading> readAllDSTemperatureSensors();
-    double readDSTemperature(const std::string& devicePath);
+    float readDSTemperature(const std::string& devicePath);
     std::vector<std::string> findDS18B20Devices();
     
     // EE895 CO2 sensor functions (I2C)
@@ -47,7 +47,7 @@ namespace rpi {
     int openI2CDevice(int i2cBus, int address);
     
     // EE895 sensor reading - returns CO2 in ppm, temperature in C, pressure in hPa
-    bool readEE895(int fd, double& co2, double& temperature, double& pressure);
+    bool readEE895(int fd, float& co2, float& temperature, float& pressure);
     
     // Read from EE895 sensor at specified I2C bus and address
     std::vector<SensorReading> readEE895Sensor(int i2cBus, int address, const std::string& sensorId);
@@ -63,8 +63,8 @@ namespace rpi {
     
     // SDS011 sensor reading structure
     struct SDS011Reading {
-        double pm2_5;
-        double pm10;
+        float pm2_5;
+        float pm10;
         bool valid;
     };
 
@@ -88,8 +88,26 @@ namespace rpi {
     // Read from SDS011 sensor
     SDS011Reading readSDS011(const std::string& devicePath);
 
-    // Read from SDS011 sensor at specified device path
+    // Read from SDS011 sensor at specified device path (used by scanner)
     std::vector<SensorReading> readSDS011Sensor(const std::string& devicePath, const std::string& sensorId);
+
+    class SDS011Reader {
+    public:
+        SDS011Reader(const std::string& devicePath, const std::string& sensorId);
+        ~SDS011Reader();
+        SDS011Reader(const SDS011Reader&) = delete;
+        SDS011Reader& operator=(const SDS011Reader&) = delete;
+        std::vector<SensorReading> getReadings() const;
+
+    private:
+        void threadFunc();
+        std::string devicePath_;
+        std::string sensorId_;
+        mutable std::mutex mutex_;
+        std::vector<SensorReading> snapshot_;
+        std::atomic<bool> stop_{false};
+        std::thread thread_;
+    };
 
     // ==================== INA219 Current/Voltage/Power Monitor ====================
 
@@ -98,13 +116,13 @@ namespace rpi {
     static constexpr int INA219_I2C_ADDRESS_2 = 0x44;
     static constexpr int INA219_I2C_ADDRESS_3 = 0x45;
 
-    bool readINA219(int fd, double shuntResistance,
-                    double& busVoltage, double& shuntVoltage,
-                    double& current, double& power);
+    bool readINA219(int fd, float shuntResistance,
+                    float& busVoltage, float& shuntVoltage,
+                    float& current, float& power);
 
     std::vector<SensorReading> readINA219Sensor(int i2cBus, int address,
                                                  const std::string& sensorId,
-                                                 double shuntResistance);
+                                                 float shuntResistance);
 
     // ==================== VE.Direct Serial Telemetry ====================
 
